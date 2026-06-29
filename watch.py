@@ -270,8 +270,9 @@ def send_telegram(text, dry=False):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
-        print("WARN: TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set; printing instead:\n" + text)
-        return
+        # Hard-fail rather than silently swallow: this keeps the filing from
+        # being marked "seen", so it re-alerts once the secrets are configured.
+        raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
     for i in range(0, len(text), TG_LIMIT):
         chunk = text[i:i + TG_LIMIT]
         payload = urllib.parse.urlencode({
