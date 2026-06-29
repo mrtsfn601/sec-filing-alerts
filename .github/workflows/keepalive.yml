@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.STATE_PUSH_TOKEN }}
+          token: ${{ secrets.STATE_PUSH_TOKEN || github.token }}
       - run: |
           git config user.name  "filing-watch-bot"
           git config user.email "actions@users.noreply.github.com"
