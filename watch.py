@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """
 sec-filing-alerts — poll SEC EDGAR for new filings by watched entities and
-push a Telegram alert. For 13F-HR filings the alert includes a deterministic
-holdings table + diff vs the prior quarter (parsed in Python, no LLM).
+push a Telegram alert. For 13F-HR filings the alert groups holdings into
+Stocks / Calls / Puts (with subtotals) and diffs vs the prior quarter —
+all parsed deterministically in Python (no LLM).
 
 Generalizable: add any entity to watchlist.json as {name, cik, forms}.
   forms: ["*"]            -> alert on every form
-  forms: ["13F-HR", ...]  -> alert only on the listed form types (exact EDGAR strings)
+  forms: ["13F-HR", ...]  -> only the listed form types (exact EDGAR strings)
 
 Usage:
-  python watch.py            # normal run: detect new filings, alert, update state
-  python watch.py --seed     # mark all current filings as seen, send NO alerts (setup)
-  python watch.py --test     # send a one-off test message to confirm the Telegram pipe
-  python watch.py --dry-run  # detect + print to stdout, do not send Telegram, do not save
+  python watch.py            # normal: detect new filings, alert, update state
+  python watch.py --seed     # mark all current filings as seen, send nothing
+  python watch.py --test     # send a one-off test message
+  python watch.py --dry-run  # detect + print to stdout, send nothing, save nothing
 
 Env (from GitHub Actions secrets; never hard-coded):
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -20,7 +21,6 @@ Env (from GitHub Actions secrets; never hard-coded):
 
 import json
 import os
-import re
 import sys
 import time
 import urllib.request
@@ -32,7 +32,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST = os.path.join(HERE, "watchlist.json")
 STATE = os.path.join(HERE, "state.json")
 
-# SEC fair-access policy requires a descriptive User-Agent (this is NOT a secret).
+# SEC fair-access policy requires a descriptive User-Agent (NOT a secret).
+# Note: SEC's WAF rejects UAs containing a URL (e.g. "github.com/..").
 UA = "sec-filing-alerts mrtsfn601 maratsafin601@gmail.com"
 SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:0>10}.json"
 ARCHIVE_DIR = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/"
@@ -41,7 +42,8 @@ FILING_INDEX = ARCHIVE_DIR + "{accession}-index.html"
 
 TG_API = "https://api.telegram.org/bot{token}/{method}"
 TG_LIMIT = 4096
-DIFF_THRESHOLD = 0.10  # +/-10% value change counts as a resize
+DIFF_THRESHOLD = 0.10       # +/-10% value change counts as a resize
+DUST = 1_000_000            # positions below $1M are collapsed / ignored in diffs
 
 
 # ----------------------------- HTTP helpers -----------------------------
@@ -53,12 +55,11 @@ def http_get(url, as_json=False, retries=3):
             req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Encoding": "gzip, deflate"})
             with urllib.request.urlopen(req, timeout=30) as r:
                 raw = r.read()
-                enc = r.headers.get("Content-Encoding", "")
-                if "gzip" in enc:
+                if "gzip" in r.headers.get("Content-Encoding", ""):
                     import gzip
                     raw = gzip.decompress(raw)
                 data = raw.decode("utf-8", "replace")
-            time.sleep(0.2)  # be polite (SEC asks <= 10 req/s)
+            time.sleep(0.2)  # polite (SEC asks <= 10 req/s)
             return json.loads(data) if as_json else data
         except Exception as e:  # noqa: BLE001
             last = e
@@ -84,7 +85,6 @@ def save_json(path, obj):
 # ----------------------------- EDGAR -----------------------------
 
 def recent_filings(cik):
-    """Return list of filing dicts (newest first) from the submissions feed."""
     d = http_get(SUBMISSIONS.format(cik=cik), as_json=True)
     f = d["filings"]["recent"]
     out = []
@@ -107,9 +107,7 @@ def form_matches(form, wanted):
 
 
 def archive_urls(cik, accession):
-    cik_int = int(cik)
-    acc_nodash = accession.replace("-", "")
-    base = {"cik_int": cik_int, "acc_nodash": acc_nodash, "accession": accession}
+    base = {"cik_int": int(cik), "acc_nodash": accession.replace("-", ""), "accession": accession}
     return INDEX_JSON.format(**base), FILING_INDEX.format(**base), ARCHIVE_DIR.format(**base)
 
 
@@ -117,12 +115,8 @@ def find_info_table_url(cik, accession):
     """Locate the 13F information-table XML within a filing directory."""
     idx_url, _, base = archive_urls(cik, accession)
     d = http_get(idx_url, as_json=True)
-    candidates = []
-    for item in d["directory"]["item"]:
-        name = item["name"]
-        if name.lower().endswith(".xml") and name.lower() != "primary_doc.xml":
-            candidates.append(name)
-    # Prefer the file whose content actually contains an informationTable.
+    candidates = [it["name"] for it in d["directory"]["item"]
+                  if it["name"].lower().endswith(".xml") and it["name"].lower() != "primary_doc.xml"]
     for name in candidates:
         url = base + name
         try:
@@ -138,10 +132,10 @@ def find_info_table_url(cik, accession):
 
 
 def parse_info_table(xml_text):
-    """Parse a 13F info table -> (aggregated {(cusip, putCall): {value, shares, name}}, total).
+    """Parse a 13F info table -> ({(cusip, putCall): {value, shares, name}}, total).
 
-    Keyed on CUSIP (stable across quarters) + put/call, because EDGAR varies
-    issuer-name casing between filings; the issuer name is kept only for display.
+    Keyed on CUSIP (stable) + put/call; EDGAR varies issuer-name casing
+    between filings, so the name is kept only for display.
     """
     root = ET.fromstring(xml_text)
     for el in root.iter():  # strip namespaces -> local tag names
@@ -166,7 +160,6 @@ def parse_info_table(xml_text):
 
 
 def prior_13f(filings, current_accession):
-    """The most recent 13F-HR(/A) older than the current one."""
     seen_current = False
     for f in filings:  # newest first
         if f["accession"] == current_accession:
@@ -177,7 +170,7 @@ def prior_13f(filings, current_accession):
     return None
 
 
-# ----------------------------- message building -----------------------------
+# ----------------------------- formatting -----------------------------
 
 def esc(s):
     return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -193,72 +186,110 @@ def money(v):
     return f"{sign}${a:,.0f}"
 
 
-def build_13f_message(entity_name, filing, cik):
-    idx_url = archive_urls(cik, filing["accession"])[1]
-    _, it_text = find_info_table_url(cik, filing["accession"])
-    now, total_now = parse_info_table(it_text)
+_NAME_TOKENS = {"Etf": "ETF", "Nv": "NV", "Ny": "NY", "Ltd": "Ltd", "Llc": "LLC",
+                "Lp": "LP", "Plc": "PLC", "Ai": "AI", "Usa": "USA", "Hldg": "Hldg"}
+
+
+def nicename(s):
+    return " ".join(_NAME_TOKENS.get(w, w) for w in s.title().split())
+
+
+def _groups(now):
+    g = {"LONG": [], "Call": [], "Put": []}
+    sub = {"LONG": 0, "Call": 0, "Put": 0}
+    for k, v in now.items():
+        pc = k[1] if k[1] in g else "LONG"
+        g[pc].append((k, v))
+        sub[pc] += v["value"]
+    for pc in g:
+        g[pc].sort(key=lambda kv: -kv[1]["value"])
+    return g, sub
+
+
+def _section(title, rows, subtotal):
+    out = ["", f"<b>{title}</b> — {money(subtotal)} · {len(rows)}"]
+    shown = [r for r in rows if r[1]["value"] >= DUST]
+    for k, v in shown:
+        out.append(f"• {esc(nicename(v['name']))} — {money(v['value'])}")
+    hidden = len(rows) - len(shown)
+    if hidden:
+        out.append(f"• + {hidden} smaller (&lt;$1M)")
+    return out
+
+
+def _tag(k):
+    return {"LONG": "", "Put": " put", "Call": " call"}.get(k[1], "")
+
+
+def _changes(now, prior):
+    keys = set(now) | set(prior)
+    new, exited, resized = [], [], []
+    for k in keys:
+        a = now.get(k, {}).get("value", 0)
+        b = prior.get(k, {}).get("value", 0)
+        a_m, b_m = a >= DUST, b >= DUST
+        if a_m and not b_m:
+            new.append(k)
+        elif b_m and not a_m:
+            exited.append(k)
+        elif a_m and b_m and abs(a - b) / b > DIFF_THRESHOLD:
+            resized.append((k, b, a))
+    new.sort(key=lambda k: -now[k]["value"])
+    exited.sort(key=lambda k: -prior[k]["value"])
+    resized.sort(key=lambda x: -(x[2] - x[1]))
+
+    out = ["", "<b>Changes vs prior quarter</b>"]
+    out.append("\U0001F195 New: " + (", ".join(esc(nicename(now[k]["name"])) + _tag(k) for k in new) or "—"))
+    out.append("❌ Exited: " + (", ".join(esc(nicename(prior[k]["name"])) + _tag(k) for k in exited) or "—"))
+    if resized:
+        out.append("\U0001F500 Resized:")
+        for k, b, a in resized:
+            out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)}: {money(b)}→{money(a)} ({(a-b)/b*100:+.0f}%)")
+    return out
+
+
+def build_13f_message(entity_name, filing, cik, filings):
+    acc = filing["accession"]
+    idx_url = archive_urls(cik, acc)[1]
+    _, it = find_info_table_url(cik, acc)
+    now, _ = parse_info_table(it)
+    g, sub = _groups(now)
 
     lines = [
-        f"\U0001F6A8 <b>New 13F-HR</b> — {esc(entity_name)}",
-        f"Period: <b>{filing['period']}</b> · Filed: {filing['filed']}",
-        f"Portfolio value: <b>{money(total_now)}</b> · Positions: <b>{len(now)}</b>",
+        f"\U0001F6A8 <b>{esc(entity_name)}</b> — new 13F-HR",
+        f"As-of {filing['period']} · filed {filing['filed']}",
+        f"\U0001F4C8 stocks {money(sub['LONG'])} · \U0001F7E2 calls {money(sub['Call'])} · \U0001F534 puts {money(sub['Put'])}",
     ]
+    lines += _section("\U0001F4C8 STOCKS", g["LONG"], sub["LONG"])
+    lines += _section("\U0001F7E2 CALLS", g["Call"], sub["Call"])
+    lines += _section("\U0001F534 PUTS", g["Put"], sub["Put"])
 
-    return lines, now, total_now, idx_url
+    prior = prior_13f(filings, acc)
+    if prior:
+        try:
+            _, pit = find_info_table_url(cik, prior["accession"])
+            pa, _ = parse_info_table(pit)
+            lines += _changes(now, pa)
+        except Exception as e:  # noqa: BLE001
+            lines += ["", f"(diff unavailable: {esc(str(e))})"]
 
-
-def _label(agg, k):
-    pc = k[1]
-    name = agg[k]["name"]
-    return esc(name) + ("" if pc == "LONG" else f" [{pc.upper()}]")
-
-
-def render_holdings(now, total_now, topn=10):
-    rows = sorted(now.items(), key=lambda kv: -kv[1]["value"])[:topn]
-    out = ["", f"<b>Top {min(topn, len(now))} holdings</b>:"]
-    for k, d in rows:
-        pct = 100 * d["value"] / total_now if total_now else 0
-        out.append(f"• {_label(now, k)} — {money(d['value'])} ({pct:.1f}%)")
-    return out
-
-
-def render_diff(now, prior):
-    now_keys, prior_keys = set(now), set(prior)
-    new = sorted(now_keys - prior_keys, key=lambda k: -now[k]["value"])
-    exited = sorted(prior_keys - now_keys, key=lambda k: -prior[k]["value"])
-    up, down = [], []
-    for k in now_keys & prior_keys:
-        a, b = now[k]["value"], prior[k]["value"]
-        if b and (a - b) / b > DIFF_THRESHOLD:
-            up.append((k, a - b))
-        elif b and (a - b) / b < -DIFF_THRESHOLD:
-            down.append((k, a - b))
-    up.sort(key=lambda x: -x[1])
-    down.sort(key=lambda x: x[1])
-
-    def label(k):
-        agg = now if k in now else prior
-        return _label(agg, k)
-
-    out = ["", "<b>Changes vs prior quarter</b>:"]
-    out.append(f"\U0001F195 New ({len(new)}): " + (", ".join(label(k) for k in new[:8]) or "—"))
-    out.append(f"❌ Exited ({len(exited)}): " + (", ".join(label(k) for k in exited[:8]) or "—"))
-    out.append(f"⬆️ Increased ({len(up)}): " + (", ".join(f"{label(k)} +{money(v)}" for k, v in up[:6]) or "—"))
-    out.append(f"⬇️ Decreased ({len(down)}): " + (", ".join(f"{label(k)} {money(v)}" for k, v in down[:6]) or "—"))
-    return out
+    lines += ["",
+              "<i>13F = long US equity + options only; option value is notional, "
+              "not capital. ~45-day lag.</i>",
+              f'<a href="{idx_url}">EDGAR ↗</a>']
+    return "\n".join(lines)
 
 
 def build_generic_message(entity_name, filing, cik):
     idx_url = archive_urls(cik, filing["accession"])[1]
     desc = filing["desc"] or filing["form"]
-    lines = [
+    return "\n".join([
         f"\U0001F4C4 <b>New filing</b> — {esc(entity_name)}",
         f"Form: <b>{esc(filing['form'])}</b>" + (f" · {esc(filing['period'])}" if filing["period"] else ""),
         f"Filed: {filing['filed']}",
         f"{esc(desc)}",
-        f'<a href="{idx_url}">View on EDGAR</a>',
-    ]
-    return "\n".join(lines)
+        f'<a href="{idx_url}">EDGAR ↗</a>',
+    ])
 
 
 # ----------------------------- Telegram -----------------------------
@@ -270,14 +301,13 @@ def send_telegram(text, dry=False):
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat = os.environ.get("TELEGRAM_CHAT_ID")
     if not token or not chat:
-        # Hard-fail rather than silently swallow: this keeps the filing from
-        # being marked "seen", so it re-alerts once the secrets are configured.
+        # Hard-fail rather than silently swallow: keeps the filing from being
+        # marked "seen", so it re-alerts once the secrets are configured.
         raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
     for i in range(0, len(text), TG_LIMIT):
-        chunk = text[i:i + TG_LIMIT]
         payload = urllib.parse.urlencode({
             "chat_id": chat,
-            "text": chunk,
+            "text": text[i:i + TG_LIMIT],
             "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }).encode()
@@ -296,16 +326,14 @@ def send_telegram(text, dry=False):
 def process_entity(entity, state, mode):
     cik = str(entity["cik"]).lstrip("0") or "0"
     cik_key = str(entity["cik"])
-    name_cfg = entity.get("name", "")
     wanted = entity.get("forms", ["*"])
 
     feed_name, filings = recent_filings(cik)
-    entity_name = name_cfg or feed_name
+    entity_name = entity.get("name", "") or feed_name
     st = state.setdefault(cik_key, {"name": entity_name, "seen": [], "last_filed": None})
     st["name"] = entity_name
     seen = set(st["seen"])
 
-    # candidates = matching, not-yet-seen, newest first
     new_filings = [f for f in filings if form_matches(f["form"], wanted) and f["accession"] not in seen]
 
     if mode == "seed":
@@ -318,29 +346,17 @@ def process_entity(entity, state, mode):
         return False
 
     changed = False
-    # oldest-first so alerts arrive chronologically
-    for f in reversed(new_filings):
+    for f in reversed(new_filings):  # oldest first -> chronological alerts
         try:
             if f["form"].startswith("13F"):
-                lines, now, total_now, idx_url = build_13f_message(entity_name, f, cik)
-                lines += render_holdings(now, total_now)
-                prior = prior_13f(filings, f["accession"])
-                if prior:
-                    try:
-                        _, pit = find_info_table_url(cik, prior["accession"])
-                        prior_agg, _ = parse_info_table(pit)
-                        lines += render_diff(now, prior_agg)
-                    except Exception as e:  # noqa: BLE001
-                        lines += ["", f"(diff unavailable: {esc(str(e))})"]
-                lines += ["", f'<a href="{idx_url}">View on EDGAR</a>']
-                msg = "\n".join(lines)
+                msg = build_13f_message(entity_name, f, cik, filings)
             else:
                 msg = build_generic_message(entity_name, f, cik)
-        except Exception as e:  # noqa: BLE001 — fall back to a bare alert, never crash the run
+        except Exception as e:  # noqa: BLE001 — fall back to a bare alert, never crash
             idx_url = archive_urls(cik, f["accession"])[1]
             msg = (f"\U0001F4C4 <b>New filing</b> — {esc(entity_name)}\n"
                    f"Form: <b>{esc(f['form'])}</b> · Filed: {f['filed']}\n"
-                   f'<a href="{idx_url}">View on EDGAR</a>\n(enrichment failed: {esc(str(e))})')
+                   f'<a href="{idx_url}">EDGAR ↗</a>\n(enrichment failed: {esc(str(e))})')
 
         send_telegram(msg, dry=(mode == "dry"))
         seen.add(f["accession"])
@@ -356,15 +372,10 @@ def process_entity(entity, state, mode):
 
 def main():
     args = set(sys.argv[1:])
-    mode = "normal"
-    if "--seed" in args:
-        mode = "seed"
-    elif "--dry-run" in args:
-        mode = "dry"
-
     if "--test" in args:
         send_telegram("✅ <b>sec-filing-alerts</b> test message — the Telegram pipe works.")
         return
+    mode = "seed" if "--seed" in args else ("dry" if "--dry-run" in args else "normal")
 
     watchlist = load_json(WATCHLIST, [])
     state = load_json(STATE, {})
@@ -379,7 +390,6 @@ def main():
     if mode == "seed" or (any_changed and mode == "normal"):
         save_json(STATE, state)
         print("state.json updated")
-    # Emit a flag the workflow can grep to decide whether to commit.
     print("STATE_CHANGED=" + ("1" if (mode == "seed" or any_changed) else "0"))
 
 
