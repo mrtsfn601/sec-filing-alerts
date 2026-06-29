@@ -1,0 +1,29 @@
+name: keepalive
+
+# GitHub auto-disables scheduled workflows after 60 days of no repo activity.
+# This makes a tiny commit on the 1st of each month (authed via the PAT, so it
+# counts as user activity) to keep watch-edgar's schedule alive during quiet
+# stretches between filings.
+
+on:
+  schedule:
+    - cron: "17 12 1 * *"   # 12:17 UTC on the 1st of each month
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.STATE_PUSH_TOKEN }}
+      - run: |
+          git config user.name  "filing-watch-bot"
+          git config user.email "actions@users.noreply.github.com"
+          date -u +"%Y-%m-%dT%H:%M:%SZ" > .keepalive
+          git add .keepalive
+          git commit -m "keepalive [skip ci]" || echo "nothing to commit"
+          git push || echo "nothing to push"

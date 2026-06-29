@@ -1,0 +1,59 @@
+name: watch-edgar
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # every 5 min, 24/7 (free on public repos; GitHub may delay)
+  workflow_dispatch:         # manual run (use for testing)
+    inputs:
+      mode:
+        description: "blank=normal, test=send test msg, seed=mark all current as seen, dry-run=print only"
+        required: false
+        default: ""
+
+concurrency:
+  group: watch-edgar
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # PAT so commits count as user activity (keeps the schedule from
+          # auto-disabling after 60 days) and can push back to the repo.
+          token: ${{ secrets.STATE_PUSH_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          ARG=""
+          case "${{ github.event.inputs.mode }}" in
+            test) ARG="--test" ;;
+            seed) ARG="--seed" ;;
+            dry-run) ARG="--dry-run" ;;
+          esac
+          python watch.py $ARG
+
+      - name: Commit state if changed
+        run: |
+          if [[ -n "$(git status --porcelain state.json)" ]]; then
+            git config user.name  "filing-watch-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add state.json
+            git commit -m "state: new filing(s) seen [skip ci]"
+            git push
+          else
+            echo "state.json unchanged; nothing to commit"
+          fi
