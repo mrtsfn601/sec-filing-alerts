@@ -1,0 +1,61 @@
+name: watch-senate
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min — eFD is session/CSRF-based & scrape-sensitive; PTRs aren't latency-critical
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "blank=normal, test, seed, demo, dry-run"
+        required: false
+        default: ""
+      member:
+        description: "demo only this senator (last/full name); blank = all"
+        required: false
+        default: ""
+
+concurrency:
+  group: watch-senate
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.STATE_PUSH_TOKEN || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run senate watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          SENATE_MEMBER: ${{ github.event.inputs.member }}
+        run: |
+          ARG=""
+          case "${{ github.event.inputs.mode }}" in
+            test) ARG="--test" ;;
+            seed) ARG="--seed" ;;
+            demo) ARG="--demo" ;;
+            dry-run) ARG="--dry-run" ;;
+          esac
+          python senate_watch.py $ARG
+
+      - name: Commit state if changed
+        run: |
+          if [[ -n "$(git status --porcelain senate_state.json)" ]]; then
+            git config user.name  "filing-watch-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add senate_state.json
+            git commit -m "senate state: new PTR(s) seen [skip ci]"
+            git push
+          else
+            echo "senate_state.json unchanged; nothing to commit"
+          fi

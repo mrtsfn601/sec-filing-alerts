@@ -1,0 +1,8 @@
+[
+  { "name": "Markwayne Mullin", "first": "Markwayne", "last": "Mullin",    "state": "OK", "party": "R" },
+  { "name": "Ashley Moody",     "first": "Ashley",    "last": "Moody",     "state": "FL", "party": "R" },
+  { "name": "John Fetterman",   "first": "John",      "last": "Fetterman", "state": "PA", "party": "D" },
+  { "name": "John Curtis",      "first": "John",      "last": "Curtis",    "state": "UT", "party": "R" },
+  { "name": "Rick Scott",       "first": "Rick",      "last": "Scott",     "state": "FL", "party": "R" },
+  { "name": "Alex Padilla",     "first": "Alex",      "last": "Padilla",   "state": "CA", "party": "D" }
+]
