@@ -223,7 +223,7 @@ def _tag(k):
 
 def _changes(now, prior):
     keys = set(now) | set(prior)
-    new, exited, resized = [], [], []
+    new, exited, inc, dec = [], [], [], []
     for k in keys:
         a = now.get(k, {}).get("value", 0)
         b = prior.get(k, {}).get("value", 0)
@@ -233,32 +233,36 @@ def _changes(now, prior):
         elif b_m and not a_m:
             exited.append(k)
         elif a_m and b_m and abs(a - b) / b > DIFF_THRESHOLD:
-            resized.append((k, b, a))
+            (inc if a > b else dec).append((k, b, a))
     new.sort(key=lambda k: -now[k]["value"])
     exited.sort(key=lambda k: -prior[k]["value"])
-    resized.sort(key=lambda x: -(x[2] - x[1]))
+    inc.sort(key=lambda x: -(x[2] - x[1]))
+    dec.sort(key=lambda x: (x[2] - x[1]))  # most negative first
 
     out = ["", "<b>Changes vs prior quarter</b>"]
-    out.append("\U0001F195 New: " + (", ".join(esc(nicename(now[k]["name"])) + _tag(k) for k in new) or "—"))
-    out.append("❌ Exited: " + (", ".join(esc(nicename(prior[k]["name"])) + _tag(k) for k in exited) or "—"))
-    if resized:
-        out.append("\U0001F500 Resized:")
-        for k, b, a in resized:
-            out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)}: {money(b)}→{money(a)} ({(a-b)/b*100:+.0f}%)")
+    out.append(f"\U0001F195 New ({len(new)}): "
+               + (", ".join(esc(nicename(now[k]["name"])) + _tag(k) for k in new) or "—"))
+    out.append(f"❌ Exited ({len(exited)}): "
+               + (", ".join(esc(nicename(prior[k]["name"])) + _tag(k) for k in exited) or "—"))
+    out.append(f"⬆️ Increased ({len(inc)}):" + ("" if inc else " —"))
+    for k, b, a in inc:
+        out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)}: {money(b)}→{money(a)} ({(a-b)/b*100:+.0f}%)")
+    out.append(f"⬇️ Decreased ({len(dec)}):" + ("" if dec else " —"))
+    for k, b, a in dec:
+        out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)}: {money(b)}→{money(a)} ({(a-b)/b*100:+.0f}%)")
     return out
 
 
 def build_13f_message(entity_name, filing, cik, filings):
     acc = filing["accession"]
-    idx_url = archive_urls(cik, acc)[1]
+    last_url = archive_urls(cik, acc)[1]
     _, it = find_info_table_url(cik, acc)
     now, _ = parse_info_table(it)
     g, sub = _groups(now)
 
     lines = [
         f"\U0001F6A8 <b>{esc(entity_name)}</b> — new 13F-HR",
-        f"As-of {filing['period']} · filed {filing['filed']}",
-        f"\U0001F4C8 stocks {money(sub['LONG'])} · \U0001F7E2 calls {money(sub['Call'])} · \U0001F534 puts {money(sub['Put'])}",
+        f"Filed {filing['filed']} · Reported {filing['period']}",
     ]
     lines += _section("\U0001F4C8 STOCKS", g["LONG"], sub["LONG"])
     lines += _section("\U0001F7E2 CALLS", g["Call"], sub["Call"])
@@ -273,10 +277,12 @@ def build_13f_message(entity_name, filing, cik, filings):
         except Exception as e:  # noqa: BLE001
             lines += ["", f"(diff unavailable: {esc(str(e))})"]
 
-    lines += ["",
-              "<i>13F = long US equity + options only; option value is notional, "
-              "not capital. ~45-day lag.</i>",
-              f'<a href="{idx_url}">EDGAR ↗</a>']
+    if prior:
+        prev_url = archive_urls(cik, prior["accession"])[1]
+        link = f'Filings: <a href="{last_url}">Last</a> · <a href="{prev_url}">Previous</a>'
+    else:
+        link = f'Filings: <a href="{last_url}">Last</a>'
+    lines += ["", link]
     return "\n".join(lines)
 
 
@@ -374,6 +380,17 @@ def main():
     args = set(sys.argv[1:])
     if "--test" in args:
         send_telegram("✅ <b>sec-filing-alerts</b> test message — the Telegram pipe works.")
+        return
+    if "--demo" in args:
+        # Re-send the latest 13F for each entity WITHOUT touching state
+        # (idempotent; no commit, no cron race). For previewing the format.
+        for entity in load_json(WATCHLIST, []):
+            cik = str(entity["cik"]).lstrip("0") or "0"
+            feed_name, filings = recent_filings(cik)
+            last = next((f for f in filings if f["form"].startswith("13F")), None)
+            if last:
+                send_telegram(build_13f_message(entity.get("name") or feed_name, last, cik, filings))
+                print(f"[demo] sent {entity.get('name')} {last['accession']}")
         return
     mode = "seed" if "--seed" in args else ("dry" if "--dry-run" in args else "normal")
 

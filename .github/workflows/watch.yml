@@ -44,6 +44,7 @@ jobs:
             test) ARG="--test" ;;
             seed) ARG="--seed" ;;
             dry-run) ARG="--dry-run" ;;
+            demo) ARG="--demo" ;;
           esac
           python watch.py $ARG
 
