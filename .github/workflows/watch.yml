@@ -6,7 +6,11 @@ on:
   workflow_dispatch:         # manual run (use for testing)
     inputs:
       mode:
-        description: "blank=normal, test=send test msg, seed=mark all current as seen, dry-run=print only"
+        description: "blank=normal, test=send test msg, seed=mark all current as seen, dry-run=print only, demo=resend latest"
+        required: false
+        default: ""
+      cik:
+        description: "demo only this CIK (e.g. 2045724); blank = all"
         required: false
         default: ""
 
@@ -38,6 +42,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          DEMO_CIK: ${{ github.event.inputs.cik }}
         run: |
           ARG=""
           case "${{ github.event.inputs.mode }}" in

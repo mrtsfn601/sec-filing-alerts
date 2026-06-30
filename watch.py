@@ -284,6 +284,52 @@ def build_13f_message(entity_name, filing, cik, filings):
     return "\n".join(lines)
 
 
+def _num(s):
+    try:
+        return float(str(s).replace(",", "").strip())
+    except (ValueError, AttributeError):
+        return 0.0
+
+
+def build_ownership_message(entity_name, filing, cik):
+    """13D / 13G beneficial-ownership filings (structured XML, post-2024)."""
+    _, idx_url, base = archive_urls(cik, filing["accession"])
+    root = ET.fromstring(http_get(base + "primary_doc.xml"))
+    for el in root.iter():
+        el.tag = el.tag.split("}")[-1]
+
+    def ft(tag):
+        el = root.find(f".//{tag}")
+        return (el.text or "").strip() if (el is not None and el.text) else ""
+
+    subtype = ft("submissionType") or filing["form"]
+    issuer = ft("issuerName")
+    cls = ft("securitiesClassTitle")
+    event = ft("eventDateRequiresFilingThisStatement")
+    shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")] + [0.0])
+    pct = max([_num(e.text) for e in root.iter("classPercent")] + [0.0])
+
+    is_13d = "13D" in subtype
+    emoji = "\U0001F7E7" if is_13d else "\U0001F7E6"  # 🟧 13D (active) / 🟦 13G (passive)
+    note = "active/control stake" if is_13d else "passive ≥5% stake"
+
+    lines = [
+        f"{emoji} <b>{esc(entity_name)}</b> — {esc(subtype)} ({note})",
+        f"Subject: <b>{esc(issuer)}</b>" + (f" — {esc(cls)}" if cls else ""),
+    ]
+    stake = []
+    if shares:
+        stake.append(f"{int(shares):,} sh")
+    if pct:
+        stake.append(f"{pct:g}% of class")
+    if stake:
+        lines.append("Stake: <b>" + " · ".join(stake) + "</b>")
+    if event:
+        lines.append(f"Event date: {event}")
+    lines += ["", f'<a href="{idx_url}">EDGAR ↗</a>']
+    return "\n".join(lines)
+
+
 def build_generic_message(entity_name, filing, cik):
     idx_url = archive_urls(cik, filing["accession"])[1]
     desc = filing["desc"] or filing["form"]
@@ -374,6 +420,8 @@ def process_entity(entity, state, mode):
         try:
             if f["form"].startswith("13F"):
                 msg = build_13f_message(entity_name, f, cik, filings)
+            elif "13D" in f["form"] or "13G" in f["form"]:
+                msg = build_ownership_message(entity_name, f, cik)
             else:
                 msg = build_generic_message(entity_name, f, cik)
         except Exception as e:  # noqa: BLE001 — fall back to a bare alert, never crash
@@ -400,15 +448,23 @@ def main():
         send_telegram("✅ <b>sec-filing-alerts</b> test message — the Telegram pipe works.")
         return
     if "--demo" in args:
-        # Re-send the latest 13F for each entity WITHOUT touching state
-        # (idempotent; no commit, no cron race). For previewing the format.
+        # Re-send each entity's latest 13F AND latest 13D/13G, WITHOUT touching
+        # state (idempotent; no commit, no cron race). DEMO_CIK filters to one.
+        demo_cik = os.environ.get("DEMO_CIK", "").strip().lstrip("0")
         for entity in load_json(WATCHLIST, []):
             cik = str(entity["cik"]).lstrip("0") or "0"
+            if demo_cik and demo_cik != cik:
+                continue
             feed_name, filings = recent_filings(cik)
-            last = next((f for f in filings if f["form"].startswith("13F")), None)
-            if last:
-                send_telegram(build_13f_message(entity.get("name") or feed_name, last, cik, filings))
-                print(f"[demo] sent {entity.get('name')} {last['accession']}")
+            name = entity.get("name") or feed_name
+            last_13f = next((f for f in filings if f["form"].startswith("13F")), None)
+            last_own = next((f for f in filings if "13D" in f["form"] or "13G" in f["form"]), None)
+            if last_13f:
+                send_telegram(build_13f_message(name, last_13f, cik, filings))
+                print(f"[demo] {name}: sent 13F {last_13f['accession']}")
+            if last_own:
+                send_telegram(build_ownership_message(name, last_own, cik))
+                print(f"[demo] {name}: sent {last_own['form']} {last_own['accession']}")
         return
     mode = "seed" if "--seed" in args else ("dry" if "--dry-run" in args else "normal")
 
