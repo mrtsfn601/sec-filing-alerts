@@ -1,0 +1,17 @@
+[
+  { "name": "Nancy Pelosi",     "last": "Pelosi",     "state": "CA", "party": "D" },
+  { "name": "Brian Babin",      "last": "Babin",      "state": "TX", "party": "R" },
+  { "name": "John McGuire",     "last": "McGuire",    "state": "VA", "party": "R" },
+  { "name": "Roger Williams",   "last": "Williams",   "state": "TX", "party": "R" },
+  { "name": "Steve Cohen",      "last": "Cohen",      "state": "TN", "party": "D" },
+  { "name": "Kelly Morrison",   "last": "Morrison",   "state": "MN", "party": "D" },
+  { "name": "Josh Gottheimer",  "last": "Gottheimer", "state": "NJ", "party": "D" },
+  { "name": "Scott Franklin",   "last": "Franklin",   "state": "FL", "party": "R" },
+  { "name": "Warren Davidson",  "last": "Davidson",   "state": "OH", "party": "R" },
+  { "name": "Donald Norcross",  "last": "Norcross",   "state": "NJ", "party": "D" },
+  { "name": "Terri Sewell",     "last": "Sewell",     "state": "AL", "party": "D" },
+  { "name": "Bryan Steil",      "last": "Steil",      "state": "WI", "party": "R" },
+  { "name": "Nick LaLota",      "last": "LaLota",     "state": "NY", "party": "R" },
+  { "name": "Michael Guest",    "last": "Guest",      "state": "MS", "party": "R" },
+  { "name": "Tom McClintock",   "last": "McClintock", "state": "CA", "party": "R" }
+]
