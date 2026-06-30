@@ -2,7 +2,7 @@ name: watch-congress
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 min (House PTRs post a few times/day; not latency-critical)
+    - cron: "*/5 * * * *"   # every 5 min, 24/7
   workflow_dispatch:
     inputs:
       mode:
