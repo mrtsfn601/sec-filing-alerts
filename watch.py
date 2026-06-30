@@ -291,6 +291,18 @@ def _num(s):
         return 0.0
 
 
+def _isodate(s):
+    """'06/22/2026' -> '2026-06-22' (leave other formats unchanged)."""
+    parts = (s or "").strip().split("/")
+    if len(parts) == 3 and parts[2].isdigit():
+        mm, dd, yy = parts
+        try:
+            return f"{yy}-{int(mm):02d}-{int(dd):02d}"
+        except ValueError:
+            return s
+    return s
+
+
 def build_ownership_message(entity_name, filing, cik):
     """13D / 13G beneficial-ownership filings (structured XML, post-2024)."""
     _, idx_url, base = archive_urls(cik, filing["accession"])
@@ -310,9 +322,14 @@ def build_ownership_message(entity_name, filing, cik):
     shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")] + [0.0])
     pct = max([_num(e.text) for e in root.iter("classPercent")] + [0.0])
 
+    hdr2 = f"Filed {filing['filed']}"
+    if filing.get("period"):
+        hdr2 += f" · Reported {filing['period']}"
+    if event:
+        hdr2 += f" · Event date {_isodate(event)}"
     lines = [
         f"\U0001F6A8 <b>{esc(entity_name)}</b> — new {esc(short)}",
-        f"Filed {filing['filed']}" + (f" · Reported {filing['period']}" if filing.get("period") else ""),
+        hdr2,
         "",
         "<b>\U0001F4C8 STOCKS</b>",
     ]
@@ -322,8 +339,6 @@ def build_ownership_message(entity_name, filing, cik):
     if pct:
         stake.append(f"{pct:g}% of {esc(cls) if cls else 'class'}")
     lines.append(f"• <b>{esc(issuer)}</b> — " + (" · ".join(stake) if stake else "—"))
-    if event:
-        lines.append(f"  ↳ event date {event}")
     lines += ["", f'Filings: <a href="{idx_url}">Last</a>']
     return "\n".join(lines)
 
