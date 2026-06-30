@@ -13,5 +13,6 @@
   { "name": "Bryan Steil",      "last": "Steil",      "state": "WI", "party": "R" },
   { "name": "Nick LaLota",      "last": "LaLota",     "state": "NY", "party": "R" },
   { "name": "Michael Guest",    "last": "Guest",      "state": "MS", "party": "R" },
-  { "name": "Tom McClintock",   "last": "McClintock", "state": "CA", "party": "R" }
+  { "name": "Tom McClintock",   "last": "McClintock", "state": "CA", "party": "R" },
+  { "name": "Debbie Wasserman Schultz", "last": "Wasserman Schultz", "state": "FL", "party": "D" }
 ]
