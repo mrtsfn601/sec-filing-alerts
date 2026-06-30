@@ -13,6 +13,10 @@ on:
         description: "demo only this CIK (e.g. 2045724); blank = all"
         required: false
         default: ""
+      acc:
+        description: "demo these exact accession(s), comma-separated, in order; blank = latest of each type"
+        required: false
+        default: ""
 
 concurrency:
   group: watch-edgar
@@ -43,6 +47,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DEMO_CIK: ${{ github.event.inputs.cik }}
+          DEMO_ACC: ${{ github.event.inputs.acc }}
         run: |
           ARG=""
           case "${{ github.event.inputs.mode }}" in

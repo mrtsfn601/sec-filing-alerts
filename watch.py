@@ -470,22 +470,38 @@ def main():
         # Re-send each entity's latest 13F AND latest 13D/13G, WITHOUT touching
         # state (idempotent; no commit, no cron race). DEMO_CIK filters to one.
         demo_cik = os.environ.get("DEMO_CIK", "").strip().lstrip("0")
+        demo_acc = [a.strip() for a in os.environ.get("DEMO_ACC", "").split(",") if a.strip()]
         for entity in load_json(WATCHLIST, []):
             cik = str(entity["cik"]).lstrip("0") or "0"
             if demo_cik and demo_cik != cik:
                 continue
             feed_name, filings = recent_filings(cik)
             name = entity.get("name") or feed_name
-            last_13f = next((f for f in filings if f["form"].startswith("13F")), None)
-            last_13d = next((f for f in filings if "13D" in f["form"]), None)
-            last_13g = next((f for f in filings if "13G" in f["form"]), None)
-            if last_13f:
-                send_telegram(build_13f_message(name, last_13f, cik, filings))
-                print(f"[demo] {name}: sent 13F {last_13f['accession']}")
-            for f in (last_13d, last_13g):
-                if f:
-                    send_telegram(build_ownership_message(name, f, cik))
-                    print(f"[demo] {name}: sent {f['form']} {f['accession']}")
+
+            def send_one(f):
+                if f["form"].startswith("13F"):
+                    msg = build_13f_message(name, f, cik, filings)
+                elif "13D" in f["form"] or "13G" in f["form"]:
+                    msg = build_ownership_message(name, f, cik)
+                else:
+                    msg = build_generic_message(name, f, cik)
+                send_telegram(msg)
+                print(f"[demo] {name}: sent {f['form']} {f['accession']}")
+
+            if demo_acc:  # send these exact accessions, in the order requested
+                by_acc = {f["accession"]: f for f in filings}
+                for a in demo_acc:
+                    if a in by_acc:
+                        send_one(by_acc[a])
+                    else:
+                        print(f"[demo] {name}: accession {a} not found")
+            else:  # default: latest 13F, latest 13D, latest 13G
+                last_13f = next((f for f in filings if f["form"].startswith("13F")), None)
+                last_13d = next((f for f in filings if "13D" in f["form"]), None)
+                last_13g = next((f for f in filings if "13G" in f["form"]), None)
+                for f in (last_13f, last_13d, last_13g):
+                    if f:
+                        send_one(f)
         return
     mode = "seed" if "--seed" in args else ("dry" if "--dry-run" in args else "normal")
 
