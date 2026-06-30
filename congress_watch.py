@@ -149,16 +149,22 @@ def build_message(member, row, txns):
     head = f"🏛️ <b>{esc(member['name'])}</b> ({esc(member['party'])}-{esc(row['state'])}) — new PTR"
     lines = [head, f"Filed {_isodate(row['date'])}"]
     if not txns:
-        lines.append("(could not parse transactions — see filing)")
+        lines += ["", "(could not parse transactions — see filing)"]
+    groups, order = {}, []
     for x in txns:
-        emoji, verb = VERB.get(x["type"], ("•", x["type"]))
-        code = "" if x["code"].upper() == "ST" else f" [{esc(x['code'])}]"
-        owner = OWNER.get(x["owner"], x["owner"])
-        mmdd = x["txn"][:5]
-        lines.append(f"• {emoji} {verb} <b>{esc(x['ticker'])}</b>{code} — {band(x['low'], x['high'], x.get('plus'))} · {owner} · txn {mmdd}")
-        if x["desc"] and ("option" in x["desc"].lower() or len(txns) <= 6):
-            d = x["desc"][:120]
-            lines.append(f"   ↳ {esc(d)}")
+        key = VERB.get(x["type"], ("•", x["type"]))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(x)
+    for emoji, verb in order:
+        lines += ["", f"{emoji} <b>{verb}</b>"]
+        for x in groups[(emoji, verb)]:
+            code = "" if x["code"].upper() == "ST" else f" [{esc(x['code'])}]"
+            seg = f"• <b>{esc(x['ticker'])}</b>{code} — {band(x['low'], x['high'], x.get('plus'))} · {x['txn'][:5]}"
+            if x["desc"]:
+                seg += f" · {esc(x['desc'])}"
+            lines.append(seg)
     lines += ["", f'<a href="{pdfurl}">Filing ↗</a>']
     return "\n".join(lines)
 

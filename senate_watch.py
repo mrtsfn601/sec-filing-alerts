@@ -122,16 +122,22 @@ def build_message(sen, ptr, txns):
     head = f"🏛️ <b>{esc(sen['name'])}</b> ({esc(sen['party'])}-{esc(sen['state'])}, Senate) — new PTR"
     lines = [head, f"Filed {_isodate(ptr['date'])}"]
     if ptr["paper"]:
-        lines.append("(paper filing — see PDF)")
+        lines += ["", "(paper filing — see PDF)"]
     elif not txns:
-        lines.append("(no transactions parsed — see filing)")
+        lines += ["", "(no transactions parsed — see filing)"]
+    groups, order = {}, []
     for x in txns:
-        emoji, verb = VERB.get(x["ttype"], ("•", x["ttype"]))
-        tk = x["ticker"] if x["ticker"] and x["ticker"] != "--" else x["asset"][:24]
-        owner = x["owner"].lower()
-        mmdd = x["date"][:5]
-        suffix = "" if x["atype"].lower() == "stock" else f" [{esc(x['atype'])}]"
-        lines.append(f"• {emoji} {verb} <b>{esc(tk)}</b>{suffix} — {band(x['amount'])} · {owner} · txn {mmdd}")
+        key = VERB.get(x["ttype"], ("•", x["ttype"]))
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(x)
+    for emoji, verb in order:
+        lines += ["", f"{emoji} <b>{verb}</b>"]
+        for x in groups[(emoji, verb)]:
+            tk = x["ticker"] if x["ticker"] and x["ticker"] != "--" else x["asset"][:24]
+            suffix = "" if x["atype"].lower() == "stock" else f" [{esc(x['atype'])}]"
+            lines.append(f"• <b>{esc(tk)}</b>{suffix} — {band(x['amount'])} · {x['date'][:5]}")
     lines += ["", f'<a href="{BASE}{ptr["href"]}">Filing ↗</a>']
     return "\n".join(lines)
 
