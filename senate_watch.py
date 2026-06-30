@@ -135,9 +135,9 @@ def build_message(sen, ptr, txns):
     for emoji, verb in order:
         lines += ["", f"{emoji} <b>{verb}</b>"]
         for x in groups[(emoji, verb)]:
-            tk = x["ticker"] if x["ticker"] and x["ticker"] != "--" else x["asset"][:24]
-            suffix = "" if x["atype"].lower() == "stock" else f" [{esc(x['atype'])}]"
-            lines.append(f"• <b>{esc(tk)}</b>{suffix} — {band(x['amount'])} · {x['date'][:5]}")
+            tk = x["ticker"] if x["ticker"] and x["ticker"] != "--" else x["asset"]
+            tk = re.sub(r"\s+", " ", tk).strip()[:30].rstrip()
+            lines.append(f"• <b>{esc(tk)}</b> — {band(x['amount'])} · {x['date'][:5]}")
     lines += ["", f'<a href="{BASE}{ptr["href"]}">Filing ↗</a>']
     return "\n".join(lines)
 
