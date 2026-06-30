@@ -111,7 +111,7 @@ _SPINE = re.compile(
     r"\(([A-Z0-9.\-]{1,6})\)\s*\[([A-Za-z]{1,3})\]\s*"       # (TICKER) [CODE]
     r"(S \(partial\)|P|S|E)\s+"                                # transaction type
     r"(\d{2}/\d{2}/\d{4})\s+\d{2}/\d{2}/\d{4}\s+"              # txn date, notification date
-    r"\$([\d,]+)\s*-\s*\$([\d,]+)")                            # amount low - high
+    r"\$([\d,]+(?:\.\d+)?)(?:\s*-\s*\$([\d,]+(?:\.\d+)?)|\s*(\+))?")  # range | single | open-ended
 
 
 def parse_ptr(text):
@@ -119,20 +119,29 @@ def parse_ptr(text):
     t = re.sub(r"[ \t]+", " ", text.replace("\n", " "))
     out = []
     for m in _SPINE.finditer(t):
-        ticker, code, typ, txn, low, high = m.groups()
+        ticker, code, typ, txn, low, high, plus = m.groups()
         pre = t[max(0, m.start() - 120):m.start()]
         mo = re.search(r"(SP|JT|DC)\s+[^()]*$", pre)
         owner = mo.group(1) if mo else ""
         post = t[m.end():m.end() + 300]
         md = re.search(r"D\s*:\s*(.+?)(?:\s+(?:SP|JT|DC)\s|\* For the complete|Filing ID|$)", post)
         desc = (md.group(1).strip() if md else "")
-        out.append({"ticker": ticker, "code": code, "type": typ,
-                    "txn": txn, "low": low, "high": high, "owner": owner, "desc": desc})
+        out.append({"ticker": ticker, "code": code, "type": typ, "txn": txn,
+                    "low": low, "high": high, "plus": plus, "owner": owner, "desc": desc})
     return out
 
 
-def band(low, high):
-    return f"{money(int(low.replace(',', '')))}–{money(int(high.replace(',', '')))}"
+def _amt(s):
+    return int(float(s.replace(",", ""))) if s else 0
+
+
+def band(low, high, plus=None):
+    lo = _amt(low)
+    if high:
+        return f"{money(lo)}–{money(_amt(high))}"
+    if plus:
+        return f"{money(lo)}+"
+    return money(lo)
 
 
 def build_message(member, row, txns):
@@ -146,7 +155,7 @@ def build_message(member, row, txns):
         code = "" if x["code"].upper() == "ST" else f" [{esc(x['code'])}]"
         owner = OWNER.get(x["owner"], x["owner"])
         mmdd = x["txn"][:5]
-        lines.append(f"• {emoji} {verb} <b>{esc(x['ticker'])}</b>{code} — {band(x['low'], x['high'])} · {owner} · txn {mmdd}")
+        lines.append(f"• {emoji} {verb} <b>{esc(x['ticker'])}</b>{code} — {band(x['low'], x['high'], x.get('plus'))} · {owner} · txn {mmdd}")
         if x["desc"] and ("option" in x["desc"].lower() or len(txns) <= 6):
             d = x["desc"][:120]
             lines.append(f"   ↳ {esc(d)}")
