@@ -29,7 +29,7 @@ import time
 import urllib.parse
 import urllib.request
 
-from watch import send_telegram, esc, money
+from watch import send_telegram, esc, money, _isodate
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST = os.path.join(HERE, "senate.json")
@@ -120,7 +120,7 @@ def band(s):
 
 def build_message(sen, ptr, txns):
     head = f"🏛️ <b>{esc(sen['name'])}</b> ({esc(sen['party'])}-{esc(sen['state'])}, Senate) — new PTR"
-    lines = [head, f"Filed {ptr['date']}"]
+    lines = [head, f"Filed {_isodate(ptr['date'])}"]
     if ptr["paper"]:
         lines.append("(paper filing — see PDF)")
     elif not txns:

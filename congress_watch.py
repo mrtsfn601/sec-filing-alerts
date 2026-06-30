@@ -34,7 +34,7 @@ import time
 import urllib.request
 import zipfile
 
-from watch import send_telegram, esc, money  # reuse Telegram pipe + helpers
+from watch import send_telegram, esc, money, _isodate  # reuse Telegram pipe + helpers
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 WATCHLIST = os.path.join(HERE, "congress.json")
@@ -147,7 +147,7 @@ def band(low, high, plus=None):
 def build_message(member, row, txns):
     pdfurl = PTR_PDF.format(year=row["year"], docid=row["docid"])
     head = f"🏛️ <b>{esc(member['name'])}</b> ({esc(member['party'])}-{esc(row['state'])}) — new PTR"
-    lines = [head, f"Filed {row['date']}"]
+    lines = [head, f"Filed {_isodate(row['date'])}"]
     if not txns:
         lines.append("(could not parse transactions — see filing)")
     for x in txns:
