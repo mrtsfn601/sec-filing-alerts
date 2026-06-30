@@ -103,7 +103,8 @@ def recent_filings(cik):
 def form_matches(form, wanted):
     if not wanted or "*" in wanted:
         return True
-    return form in wanted
+    # substring match so e.g. "13D" catches "SCHEDULE 13D", "SC 13D/A", etc.
+    return any(w in form for w in wanted)
 
 
 def archive_urls(cik, accession):
