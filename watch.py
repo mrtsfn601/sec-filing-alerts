@@ -316,11 +316,17 @@ def build_ownership_message(entity_name, filing, cik):
 
     subtype = ft("submissionType") or filing["form"]
     short = subtype.replace("SCHEDULE ", "").replace("SC ", "").strip() or subtype  # -> 13G, 13G/A, 13D
+    amend = ft("amendmentNo")
+    if amend:
+        short = f"{short} #{amend}"
     issuer = ft("issuerName")
     cls = ft("securitiesClassTitle")
-    event = ft("eventDateRequiresFilingThisStatement")
-    shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")] + [0.0])
-    pct = max([_num(e.text) for e in root.iter("classPercent")] + [0.0])
+    # field names differ between the 13G and 13D XML schemas — try both
+    event = ft("eventDateRequiresFilingThisStatement") or ft("dateOfEvent")
+    shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")]
+                 + [_num(e.text) for e in root.iter("aggregateAmountOwned")] + [0.0])
+    pct = max([_num(e.text) for e in root.iter("classPercent")]
+              + [_num(e.text) for e in root.iter("percentOfClass")] + [0.0])
 
     hdr2 = f"Filed {filing['filed']}"
     if filing.get("period"):
@@ -471,13 +477,15 @@ def main():
             feed_name, filings = recent_filings(cik)
             name = entity.get("name") or feed_name
             last_13f = next((f for f in filings if f["form"].startswith("13F")), None)
-            last_own = next((f for f in filings if "13D" in f["form"] or "13G" in f["form"]), None)
+            last_13d = next((f for f in filings if "13D" in f["form"]), None)
+            last_13g = next((f for f in filings if "13G" in f["form"]), None)
             if last_13f:
                 send_telegram(build_13f_message(name, last_13f, cik, filings))
                 print(f"[demo] {name}: sent 13F {last_13f['accession']}")
-            if last_own:
-                send_telegram(build_ownership_message(name, last_own, cik))
-                print(f"[demo] {name}: sent {last_own['form']} {last_own['accession']}")
+            for f in (last_13d, last_13g):
+                if f:
+                    send_telegram(build_ownership_message(name, f, cik))
+                    print(f"[demo] {name}: sent {f['form']} {f['accession']}")
         return
     mode = "seed" if "--seed" in args else ("dry" if "--dry-run" in args else "normal")
 
