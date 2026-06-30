@@ -275,12 +275,7 @@ def build_13f_message(entity_name, filing, cik, filings):
         except Exception as e:  # noqa: BLE001
             lines += ["", f"(diff unavailable: {esc(str(e))})"]
 
-    if prior:
-        prev_url = archive_urls(cik, prior["accession"])[1]
-        link = f'Filings: <a href="{last_url}">Last</a> · <a href="{prev_url}">Previous</a>'
-    else:
-        link = f'Filings: <a href="{last_url}">Last</a>'
-    lines += ["", link]
+    lines += ["", f'<a href="{last_url}">Filing ↗</a>']
     return "\n".join(lines)
 
 
@@ -345,7 +340,7 @@ def build_ownership_message(entity_name, filing, cik):
     if pct:
         stake.append(f"{pct:g}% of {esc(cls) if cls else 'class'}")
     lines.append(f"• <b>{esc(issuer)}</b> — " + (" · ".join(stake) if stake else "—"))
-    lines += ["", f'Filings: <a href="{idx_url}">Last</a>']
+    lines += ["", f'<a href="{idx_url}">Filing ↗</a>']
     return "\n".join(lines)
 
 
@@ -357,7 +352,7 @@ def build_generic_message(entity_name, filing, cik):
         f"Form: <b>{esc(filing['form'])}</b>" + (f" · {esc(filing['period'])}" if filing["period"] else ""),
         f"Filed: {filing['filed']}",
         f"{esc(desc)}",
-        f'<a href="{idx_url}">EDGAR ↗</a>',
+        f'<a href="{idx_url}">Filing ↗</a>',
     ])
 
 
@@ -447,7 +442,7 @@ def process_entity(entity, state, mode):
             idx_url = archive_urls(cik, f["accession"])[1]
             msg = (f"\U0001F4C4 <b>New filing</b> — {esc(entity_name)}\n"
                    f"Form: <b>{esc(f['form'])}</b> · Filed: {f['filed']}\n"
-                   f'<a href="{idx_url}">EDGAR ↗</a>\n(enrichment failed: {esc(str(e))})')
+                   f'<a href="{idx_url}">Filing ↗</a>\n(enrichment failed: {esc(str(e))})')
 
         send_telegram(msg, dry=(mode == "dry"))
         seen.add(f["accession"])

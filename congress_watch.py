@@ -159,7 +159,7 @@ def build_message(member, row, txns):
         if x["desc"] and ("option" in x["desc"].lower() or len(txns) <= 6):
             d = x["desc"][:120]
             lines.append(f"   ↳ {esc(d)}")
-    lines += ["", f'<a href="{pdfurl}">Filing PDF</a>']
+    lines += ["", f'<a href="{pdfurl}">Filing ↗</a>']
     return "\n".join(lines)
 
 
