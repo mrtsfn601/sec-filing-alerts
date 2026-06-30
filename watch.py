@@ -208,17 +208,13 @@ def _groups(now):
 
 def _section(title, rows, subtotal):
     out = ["", f"<b>{title}</b> — {money(subtotal)} · {len(rows)}"]
-    shown = [r for r in rows if r[1]["value"] >= DUST]
-    for k, v in shown:
+    for k, v in rows:
         out.append(f"• {esc(nicename(v['name']))} — {money(v['value'])}")
-    hidden = len(rows) - len(shown)
-    if hidden:
-        out.append(f"• + {hidden} smaller (&lt;$1M)")
     return out
 
 
 def _tag(k):
-    return {"LONG": "", "Put": " put", "Call": " call"}.get(k[1], "")
+    return {"LONG": " stock", "Put": " put", "Call": " call"}.get(k[1], "")
 
 
 def _changes(now, prior):
