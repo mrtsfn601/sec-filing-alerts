@@ -303,30 +303,28 @@ def build_ownership_message(entity_name, filing, cik):
         return (el.text or "").strip() if (el is not None and el.text) else ""
 
     subtype = ft("submissionType") or filing["form"]
+    short = subtype.replace("SCHEDULE ", "").replace("SC ", "").strip() or subtype  # -> 13G, 13G/A, 13D
     issuer = ft("issuerName")
     cls = ft("securitiesClassTitle")
     event = ft("eventDateRequiresFilingThisStatement")
     shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")] + [0.0])
     pct = max([_num(e.text) for e in root.iter("classPercent")] + [0.0])
 
-    is_13d = "13D" in subtype
-    emoji = "\U0001F7E7" if is_13d else "\U0001F7E6"  # 🟧 13D (active) / 🟦 13G (passive)
-    note = "active/control stake" if is_13d else "passive ≥5% stake"
-
     lines = [
-        f"{emoji} <b>{esc(entity_name)}</b> — {esc(subtype)} ({note})",
-        f"Subject: <b>{esc(issuer)}</b>" + (f" — {esc(cls)}" if cls else ""),
+        f"\U0001F6A8 <b>{esc(entity_name)}</b> — new {esc(short)}",
+        f"Filed {filing['filed']}" + (f" · Reported {filing['period']}" if filing.get("period") else ""),
+        "",
+        "<b>\U0001F4C8 STOCKS</b>",
     ]
     stake = []
     if shares:
         stake.append(f"{int(shares):,} sh")
     if pct:
-        stake.append(f"{pct:g}% of class")
-    if stake:
-        lines.append("Stake: <b>" + " · ".join(stake) + "</b>")
+        stake.append(f"{pct:g}% of {esc(cls) if cls else 'class'}")
+    lines.append(f"• <b>{esc(issuer)}</b> — " + (" · ".join(stake) if stake else "—"))
     if event:
-        lines.append(f"Event date: {event}")
-    lines += ["", f'<a href="{idx_url}">EDGAR ↗</a>']
+        lines.append(f"  ↳ event date {event}")
+    lines += ["", f'Filings: <a href="{idx_url}">Last</a>']
     return "\n".join(lines)
 
 
