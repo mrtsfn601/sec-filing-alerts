@@ -9,6 +9,10 @@ on:
         description: "blank=normal, test, seed, demo, dry-run"
         required: false
         default: ""
+      member:
+        description: "demo only this member (last name or full name); blank = all"
+        required: false
+        default: ""
 
 concurrency:
   group: watch-congress
@@ -36,6 +40,7 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          CONGRESS_MEMBER: ${{ github.event.inputs.member }}
         run: |
           ARG=""
           case "${{ github.event.inputs.mode }}" in

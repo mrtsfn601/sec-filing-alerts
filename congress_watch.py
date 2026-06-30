@@ -154,6 +154,13 @@ def build_message(member, row, txns):
     return "\n".join(lines)
 
 
+def _datekey(r):
+    try:
+        return (int(r["year"]), datetime.datetime.strptime(r["date"], "%m/%d/%Y"))
+    except Exception:  # noqa: BLE001
+        return (int(r["year"] or 0), datetime.datetime.min)
+
+
 def member_key(m):
     return f"{m['last'].lower()}|{m['state'].upper()}"
 
@@ -173,6 +180,10 @@ def main():
            ("dry" if "--dry-run" in args else "normal"))
 
     members = load_json(WATCHLIST, [])
+    demo_filter = os.environ.get("CONGRESS_MEMBER", "").strip().lower()
+    if mode == "demo" and demo_filter:
+        members = [m for m in members
+                   if demo_filter in m["name"].lower() or demo_filter in m["last"].lower()]
     state = load_json(STATE, {})
     year = datetime.date.today().year
     rows = index_rows(year) + index_rows(year - 1)  # cover Jan boundary
@@ -182,7 +193,7 @@ def main():
         key = member_key(m)
         st = state.setdefault(key, {"name": m["name"], "seen": [], "last_filed": None})
         ptrs = [r for r in rows if matches(r, m)]
-        ptrs.sort(key=lambda r: (r["year"], r["date"]))  # oldest first
+        ptrs.sort(key=_datekey)  # oldest first (chronological)
 
         if mode == "seed":
             st["seen"] = sorted({r["docid"] for r in ptrs})
