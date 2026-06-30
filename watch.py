@@ -236,10 +236,12 @@ def _changes(now, prior):
     dec.sort(key=lambda x: (x[2] - x[1]))  # most negative first
 
     out = ["", "<b>Changes vs prior quarter</b>"]
-    out.append(f"\U0001F195 New ({len(new)}): "
-               + (", ".join(esc(nicename(now[k]["name"])) + _tag(k) for k in new) or "—"))
-    out.append(f"❌ Exited ({len(exited)}): "
-               + (", ".join(esc(nicename(prior[k]["name"])) + _tag(k) for k in exited) or "—"))
+    out.append(f"\U0001F195 New ({len(new)}):" + ("" if new else " —"))
+    for k in new:
+        out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)} — {money(now[k]['value'])}")
+    out.append(f"❌ Exited ({len(exited)}):" + ("" if exited else " —"))
+    for k in exited:
+        out.append(f"• {esc(nicename(prior[k]['name']))}{_tag(k)} — {money(prior[k]['value'])}")
     out.append(f"⬆️ Increased ({len(inc)}):" + ("" if inc else " —"))
     for k, b, a in inc:
         out.append(f"• {esc(nicename(now[k]['name']))}{_tag(k)}: {money(b)}→{money(a)} ({(a-b)/b*100:+.0f}%)")
@@ -296,6 +298,26 @@ def build_generic_message(entity_name, filing, cik):
 
 # ----------------------------- Telegram -----------------------------
 
+def _chunks(text, limit=TG_LIMIT):
+    """Split on line boundaries so an HTML tag is never broken mid-message."""
+    chunks, cur = [], ""
+    for line in text.split("\n"):
+        while len(line) > limit:  # pathological single long line
+            if cur:
+                chunks.append(cur)
+                cur = ""
+            chunks.append(line[:limit])
+            line = line[limit:]
+        if len(cur) + len(line) + 1 > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = line if not cur else cur + "\n" + line
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
 def send_telegram(text, dry=False):
     if dry:
         print("---- TELEGRAM (dry) ----\n" + text + "\n------------------------")
@@ -306,10 +328,10 @@ def send_telegram(text, dry=False):
         # Hard-fail rather than silently swallow: keeps the filing from being
         # marked "seen", so it re-alerts once the secrets are configured.
         raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
-    for i in range(0, len(text), TG_LIMIT):
+    for chunk in _chunks(text, TG_LIMIT):
         payload = urllib.parse.urlencode({
             "chat_id": chat,
-            "text": text[i:i + TG_LIMIT],
+            "text": chunk,
             "parse_mode": "HTML",
             "disable_web_page_preview": "true",
         }).encode()
