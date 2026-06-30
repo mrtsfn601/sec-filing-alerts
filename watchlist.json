@@ -3,5 +3,10 @@
     "name": "Situational Awareness LP",
     "cik": "0002045724",
     "forms": ["*"]
+  },
+  {
+    "name": "Duquesne Family Office (Druckenmiller)",
+    "cik": "0001536411",
+    "forms": ["*"]
   }
 ]
