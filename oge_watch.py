@@ -259,11 +259,22 @@ def filer_key(f):
     return f["match"].lower()
 
 
+def _sort_key(p):
+    """Best-effort chronological key: filename date, else the /YYYY/MM/ upload
+    path, else empty — so dated items always rank above undated ones."""
+    d = _filename_date(p["filename"])
+    if d:
+        return d
+    mo = re.search(r"/uploads/(\d{4})/(\d{2})/", p["url"])
+    if mo:
+        return f"{mo.group(1)}-{mo.group(2)}-00"
+    return "0000-00-00"
+
+
 def items_for(filer, pdfs):
     m = filer["match"].lower()
     got = [p for p in pdfs if m in p["filename"].lower() or m in p["text"].lower()]
-    # newest first by filename date when available
-    got.sort(key=lambda p: _filename_date(p["filename"]) or p["filename"], reverse=True)
+    got.sort(key=_sort_key, reverse=True)  # newest first
     return got
 
 
