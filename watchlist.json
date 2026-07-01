@@ -4,5 +4,7 @@
   { "name": "Berkshire Hathaway (Buffett)", "cik": "0001067983", "forms": ["13F", "13D", "13G"] },
   { "name": "Pershing Square (Ackman)", "cik": "0001336528", "forms": ["13F", "13D", "13G"] },
   { "name": "Elliott Investment Management (Singer)", "cik": "0001791786", "forms": ["13F", "13D", "13G"] },
-  { "name": "Third Point (Loeb)", "cik": "0001040273", "forms": ["13F", "13D", "13G"] }
+  { "name": "Third Point (Loeb)", "cik": "0001040273", "forms": ["13F", "13D", "13G"] },
+  { "name": "Donald J. Trump (DJT / Trump Media)", "cik": "0000947033", "forms": ["13D", "13G", "4", "3"] },
+  { "name": "Donald Trump Jr. (DJT insider)", "cik": "0002016181", "forms": ["4", "3", "13G"] }
 ]

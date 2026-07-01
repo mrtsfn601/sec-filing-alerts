@@ -345,6 +345,165 @@ def build_ownership_message(entity_name, filing, cik):
     return "\n".join(lines)
 
 
+# ------------------- Form 3/4/5 (insider transactions) -------------------
+
+# SEC ownership transaction codes -> (emoji, group label). Direction (buy/sell)
+# comes from the code itself; acquired/disposed is a cross-check only.
+_TXN_CODES = {
+    "P": ("\U0001F7E2", "BUY"),                 # open-market / private purchase
+    "S": ("\U0001F534", "SELL"),                # open-market / private sale
+    "A": ("\U0001F381", "GRANT / AWARD"),       # comp grant (RSU/option/stock)
+    "M": ("⚙️", "OPTION EXERCISE"),   # exercise/conversion of derivative
+    "X": ("⚙️", "OPTION EXERCISE"),
+    "C": ("\U0001F501", "CONVERSION"),
+    "F": ("\U0001F3E6", "TAX WITHHOLDING"),     # shares withheld to pay tax/strike
+    "G": ("\U0001F381", "GIFT"),
+    "D": ("\U0001F53B", "DISPOSED TO ISSUER"),
+    "V": ("\U0001F7E2", "BUY"),
+    "J": ("•", "OTHER"),
+}
+
+_F4_LABEL = {"4": "Form 4", "4/A": "Form 4/A", "3": "Form 3", "3/A": "Form 3/A",
+             "5": "Form 5", "5/A": "Form 5/A"}
+
+
+def find_ownership_xml(cik, accession):
+    """Locate the raw ownershipDocument XML in a Form 3/4/5 filing directory."""
+    idx_url, _, base = archive_urls(cik, accession)
+    d = http_get(idx_url, as_json=True)
+    xmls = [it["name"] for it in d["directory"]["item"]
+            if it["name"].lower().endswith(".xml") and not it["name"].lower().startswith("xsl")]
+    for name in xmls:
+        url = base + name
+        try:
+            txt = http_get(url)
+        except Exception:  # noqa: BLE001
+            continue
+        if "<ownershipDocument" in txt:
+            return url, txt
+    raise RuntimeError(f"no ownership XML in {accession}")
+
+
+def _short_sec(title):
+    return (title or "").split(",")[0].strip() or (title or "").strip()
+
+
+def _f4_txns(root):
+    """All non-derivative + derivative transactions as flat dicts."""
+    out = []
+    for table, tag in (("nonDerivativeTable", "nonDerivativeTransaction"),
+                       ("derivativeTable", "derivativeTransaction")):
+        tbl = root.find(table)
+        if tbl is None:
+            continue
+        for t in tbl.findall(tag):
+            out.append({
+                "title": (t.findtext("securityTitle/value") or "").strip(),
+                "date": (t.findtext("transactionDate/value") or "").strip(),
+                "code": (t.findtext("transactionCoding/transactionCode") or "").strip(),
+                "shares": _num(t.findtext("transactionAmounts/transactionShares/value")),
+                "price": _num(t.findtext("transactionAmounts/transactionPricePerShare/value")),
+                "ad": (t.findtext("transactionAmounts/transactionAcquiredDisposedCode/value") or "").strip(),
+                "held": _num(t.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
+                "di": (t.findtext("ownershipNature/directOrIndirectOwnership/value") or "").strip(),
+                "deriv": table.startswith("deriv"),
+            })
+    return out
+
+
+def _f4_holdings(root):
+    """Static holdings (Form 3, or holding rows on a Form 4) as flat dicts."""
+    out = []
+    for table, tag in (("nonDerivativeTable", "nonDerivativeHolding"),
+                       ("derivativeTable", "derivativeHolding")):
+        tbl = root.find(table)
+        if tbl is None:
+            continue
+        for h in tbl.findall(tag):
+            out.append({
+                "title": _short_sec(h.findtext("securityTitle/value") or ""),
+                "shares": _num(h.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
+                "di": (h.findtext("ownershipNature/directOrIndirectOwnership/value") or "").strip(),
+            })
+    return out
+
+
+def _own(di):
+    return {"D": "direct", "I": "indirect"}.get(di, "")
+
+
+def build_form4_message(entity_name, filing, cik):
+    """Form 3/4/5 insider statement -> grouped BUY/SELL/GRANT/... alert."""
+    _, xml = find_ownership_xml(cik, filing["accession"])
+    root = ET.fromstring(xml)  # ownership docs carry no XML namespace
+    doctype = (root.findtext("documentType") or filing["form"]).strip()
+    issuer = (root.findtext("issuer/issuerName") or "").strip()
+    ticker = (root.findtext("issuer/issuerTradingSymbol") or "").strip()
+
+    rel = root.find("reportingOwner/reportingOwnerRelationship")
+    roles = []
+    if rel is not None:
+        if (rel.findtext("isDirector") or "0") in ("1", "true"):
+            roles.append("Director")
+        if (rel.findtext("isOfficer") or "0") in ("1", "true"):
+            roles.append((rel.findtext("officerTitle") or "Officer").strip() or "Officer")
+        if (rel.findtext("isTenPercentOwner") or "0") in ("1", "true"):
+            roles.append("10% owner")
+        if (rel.findtext("isOther") or "0") in ("1", "true"):
+            roles.append("Insider")
+
+    label = _F4_LABEL.get(doctype, f"Form {doctype}")
+    head = f"\U0001F9D1‍\U0001F4BC <b>{esc(entity_name)}</b> — new {label}"
+    sub = f"<b>{esc(ticker)}</b> · {esc(nicename(issuer))}" if ticker else f"<b>{esc(issuer)}</b>"
+    third = f"Filed {filing['filed']}" + (f" · {esc(' · '.join(roles))}" if roles else "")
+    lines = [head, sub, third]
+
+    txns = _f4_txns(root)
+    if txns:
+        groups, order = {}, []
+        for x in txns:
+            key = _TXN_CODES.get(x["code"], ("•", x["code"] or "OTHER"))
+            if key not in groups:
+                groups[key] = []
+                order.append(key)
+            groups[key].append(x)
+        for emoji, verb in order:
+            lines += ["", f"{emoji} <b>{verb}</b>"]
+            for x in groups[(emoji, verb)]:
+                deriv = " [deriv]" if x["deriv"] else ""
+                seg = f"• <b>{esc(_short_sec(x['title']))}</b>{deriv} — {x['shares']:,.0f} sh"
+                if x["price"]:
+                    seg += f" @ ${x['price']:,.2f} = {money(x['shares'] * x['price'])}"
+                mmdd = x["date"][5:] if len(x["date"]) == 10 else x["date"]
+                if mmdd:
+                    seg += f" · {mmdd}"
+                if _own(x["di"]):
+                    seg += f" · {_own(x['di'])}"
+                if x["held"]:
+                    seg += f" → {x['held']:,.0f} held"
+                lines.append(seg)
+    else:  # Form 3 or holdings-only Form 4/5
+        holds = _f4_holdings(root)
+        lines += ["", "<b>Holdings</b>"]
+        if holds:
+            for h in holds:
+                seg = f"• <b>{esc(h['title'])}</b> — {h['shares']:,.0f} sh"
+                if _own(h["di"]):
+                    seg += f" · {_own(h['di'])}"
+                lines.append(seg)
+        elif (root.findtext("noSecuritiesOwned") or "0") in ("1", "true"):
+            lines.append("• No securities beneficially owned")
+        else:
+            lines.append("(no holdings parsed — see filing)")
+        remarks = (root.findtext("remarks") or "").strip()
+        if remarks:
+            lines.append(f"↳ {esc(remarks[:220])}")
+
+    idx_url = archive_urls(cik, filing["accession"])[1]
+    lines += ["", f'<a href="{idx_url}">Filing ↗</a>']
+    return "\n".join(lines)
+
+
 def build_generic_message(entity_name, filing, cik):
     idx_url = archive_urls(cik, filing["accession"])[1]
     desc = filing["desc"] or filing["form"]
@@ -435,6 +594,8 @@ def process_entity(entity, state, mode):
         try:
             if f["form"].startswith("13F"):
                 msg = build_13f_message(entity_name, f, cik, filings)
+            elif f["form"] in ("4", "4/A", "5", "5/A", "3", "3/A"):
+                msg = build_form4_message(entity_name, f, cik)
             elif "13D" in f["form"] or "13G" in f["form"]:
                 msg = build_ownership_message(entity_name, f, cik)
             else:
@@ -477,6 +638,8 @@ def main():
             def send_one(f):
                 if f["form"].startswith("13F"):
                     msg = build_13f_message(name, f, cik, filings)
+                elif f["form"] in ("4", "4/A", "5", "5/A", "3", "3/A"):
+                    msg = build_form4_message(name, f, cik)
                 elif "13D" in f["form"] or "13G" in f["form"]:
                     msg = build_ownership_message(name, f, cik)
                 else:
@@ -491,11 +654,12 @@ def main():
                         send_one(by_acc[a])
                     else:
                         print(f"[demo] {name}: accession {a} not found")
-            else:  # default: latest 13F, latest 13D, latest 13G
+            else:  # default: latest 13F, 13D, 13G, and Form 4 (whichever exist)
                 last_13f = next((f for f in filings if f["form"].startswith("13F")), None)
                 last_13d = next((f for f in filings if "13D" in f["form"]), None)
                 last_13g = next((f for f in filings if "13G" in f["form"]), None)
-                for f in (last_13f, last_13d, last_13g):
+                last_f4 = next((f for f in filings if f["form"] in ("4", "4/A")), None)
+                for f in (last_13f, last_13d, last_13g, last_f4):
                     if f:
                         send_one(f)
         return
