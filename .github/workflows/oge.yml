@@ -1,0 +1,64 @@
+name: watch-oge
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min (PTRs are infrequent; index poll is cheap)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "blank=normal, test, seed, demo, dry-run"
+        required: false
+        default: ""
+      filer:
+        description: "demo only this filer (name/match substring); blank = all"
+        required: false
+        default: ""
+
+concurrency:
+  group: watch-oge
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.STATE_PUSH_TOKEN || github.token }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install poppler (pdftotext)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
+
+      - name: Run OGE watcher
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          OGE_FILER: ${{ github.event.inputs.filer }}
+        run: |
+          ARG=""
+          case "${{ github.event.inputs.mode }}" in
+            test) ARG="--test" ;;
+            seed) ARG="--seed" ;;
+            demo) ARG="--demo" ;;
+            dry-run) ARG="--dry-run" ;;
+          esac
+          python oge_watch.py $ARG
+
+      - name: Commit state if changed
+        run: |
+          if [[ -n "$(git status --porcelain oge_state.json)" ]]; then
+            git config user.name  "filing-watch-bot"
+            git config user.email "actions@users.noreply.github.com"
+            git add oge_state.json
+            git commit -m "oge state: new PTR(s) seen [skip ci]"
+            git push
+          else
+            echo "oge_state.json unchanged; nothing to commit"
+          fi
