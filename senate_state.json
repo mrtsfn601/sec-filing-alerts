@@ -1,9 +1,4 @@
 {
-  "armstrong|OK": {
-    "last_filed": null,
-    "name": "Alan Armstrong",
-    "seen": []
-  },
   "curtis|UT": {
     "last_filed": "06/30/2026",
     "name": "John Curtis",
@@ -37,21 +32,6 @@
       "f34c4d7a-29ba-48fb-beea-d94c1368cc99",
       "f7a22ac4-87ea-46e3-9303-c84d8b1ed6e0"
     ]
-  },
-  "moody|FL": {
-    "last_filed": "05/13/2025",
-    "name": "Ashley Moody",
-    "seen": [
-      "19100e4c-0acb-45fb-9eb3-34ec9460d5e9",
-      "376521e5-ad5e-44ec-8bd4-63847da2e049",
-      "5e2160d6-9770-4c7b-b65e-9b7794043d25",
-      "bc4381fc-d714-45da-be6f-1fa87f2212ba"
-    ]
-  },
-  "padilla|CA": {
-    "last_filed": null,
-    "name": "Alex Padilla",
-    "seen": []
   },
   "scott|FL": {
     "last_filed": "10/30/2025",

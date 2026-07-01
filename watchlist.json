@@ -3,7 +3,6 @@
   { "name": "Duquesne Family Office (Druckenmiller)", "cik": "0001536411", "forms": ["*"] },
   { "name": "Berkshire Hathaway (Buffett)", "cik": "0001067983", "forms": ["13F", "13D", "13G"] },
   { "name": "Pershing Square (Ackman)", "cik": "0001336528", "forms": ["13F", "13D", "13G"] },
-  { "name": "Scion Asset Mgmt (Burry)", "cik": "0001649339", "forms": ["13F", "13D", "13G"] },
   { "name": "Elliott Investment Management (Singer)", "cik": "0001791786", "forms": ["13F", "13D", "13G"] },
   { "name": "Third Point (Loeb)", "cik": "0001040273", "forms": ["13F", "13D", "13G"] }
 ]
