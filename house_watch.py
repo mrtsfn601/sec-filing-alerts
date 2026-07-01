@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-congress_watch.py — alert on new U.S. HOUSE Periodic Transaction Reports (PTRs,
+house_watch.py — alert on new U.S. HOUSE Periodic Transaction Reports (PTRs,
 STOCK Act stock trades) for a watchlist of members, pushed to Telegram.
 
 Separate data source from the EDGAR watcher: the official House Clerk bulk
 disclosure feed. Detection is stdlib; the per-trade detail is parsed from the
-filing PDF with `pdftotext -raw` (poppler).  Senate is NOT covered (different,
-harder source — efdsearch.senate.gov).
+filing PDF with `pdftotext -raw` (poppler). Senate is a separate watcher
+(senate_watch.py — efdsearch.senate.gov).
 
 Members are matched on LAST NAME + STATE (robust vs. formal/nickname mismatches).
 
 Usage:
-  python congress_watch.py            # detect new PTRs, alert, update state
-  python congress_watch.py --seed     # mark all current PTRs seen, send nothing
-  python congress_watch.py --demo     # re-send each member's latest PTR (no state write)
-  python congress_watch.py --dry-run  # detect + print, send nothing, save nothing
-  python congress_watch.py --test     # send a one-off test message
+  python house_watch.py            # detect new PTRs, alert, update state
+  python house_watch.py --seed     # mark all current PTRs seen, send nothing
+  python house_watch.py --demo     # re-send each member's latest PTR (no state write)
+  python house_watch.py --dry-run  # detect + print, send nothing, save nothing
+  python house_watch.py --test     # send a one-off test message
 
 Env (GitHub Actions secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (reused via watch.py)
 Requires: poppler-utils (pdftotext) on PATH.
@@ -37,8 +37,8 @@ import zipfile
 from watch import send_telegram, esc, money, _isodate  # reuse Telegram pipe + helpers
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = os.path.join(HERE, "congress.json")
-STATE = os.path.join(HERE, "congress_state.json")
+WATCHLIST = os.path.join(HERE, "house.json")
+STATE = os.path.join(HERE, "house_state.json")
 
 UA = "sec-filing-alerts mrtsfn601 maratsafin601@gmail.com"
 INDEX_ZIP = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.ZIP"
@@ -189,13 +189,13 @@ def matches(row, m):
 def main():
     args = set(sys.argv[1:])
     if "--test" in args:
-        send_telegram("✅ <b>congress-watch</b> test — House PTR alerts wired up.")
+        send_telegram("✅ <b>house-watch</b> test — House PTR alerts wired up.")
         return
     mode = "seed" if "--seed" in args else ("demo" if "--demo" in args else
            ("dry" if "--dry-run" in args else "normal"))
 
     members = load_json(WATCHLIST, [])
-    demo_filter = os.environ.get("CONGRESS_MEMBER", "").strip().lower()
+    demo_filter = os.environ.get("HOUSE_MEMBER", "").strip().lower()
     if mode == "demo" and demo_filter:
         members = [m for m in members
                    if demo_filter in m["name"].lower() or demo_filter in m["last"].lower()]
@@ -249,7 +249,7 @@ def main():
 
     if mode == "seed" or (changed and mode == "normal"):
         save_json(STATE, state)
-        print("congress_state.json updated")
+        print("house_state.json updated")
     print("STATE_CHANGED=" + ("1" if (mode == "seed" or changed) else "0"))
 
 

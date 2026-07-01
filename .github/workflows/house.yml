@@ -1,4 +1,4 @@
-name: watch-congress
+name: watch-house
 
 on:
   schedule:
@@ -15,7 +15,7 @@ on:
         default: ""
 
 concurrency:
-  group: watch-congress
+  group: watch-house
   cancel-in-progress: false
 
 permissions:
@@ -36,11 +36,11 @@ jobs:
       - name: Install poppler (pdftotext)
         run: sudo apt-get update -qq && sudo apt-get install -y -qq poppler-utils
 
-      - name: Run congress watcher
+      - name: Run house watcher
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CONGRESS_MEMBER: ${{ github.event.inputs.member }}
+          HOUSE_MEMBER: ${{ github.event.inputs.member }}
         run: |
           ARG=""
           case "${{ github.event.inputs.mode }}" in
@@ -49,16 +49,16 @@ jobs:
             demo) ARG="--demo" ;;
             dry-run) ARG="--dry-run" ;;
           esac
-          python congress_watch.py $ARG
+          python house_watch.py $ARG
 
       - name: Commit state if changed
         run: |
-          if [[ -n "$(git status --porcelain congress_state.json)" ]]; then
+          if [[ -n "$(git status --porcelain house_state.json)" ]]; then
             git config user.name  "filing-watch-bot"
             git config user.email "actions@users.noreply.github.com"
-            git add congress_state.json
-            git commit -m "congress state: new PTR(s) seen [skip ci]"
+            git add house_state.json
+            git commit -m "house state: new PTR(s) seen [skip ci]"
             git push
           else
-            echo "congress_state.json unchanged; nothing to commit"
+            echo "house_state.json unchanged; nothing to commit"
           fi
