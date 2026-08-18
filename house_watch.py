@@ -107,28 +107,173 @@ def pdf_text(year, docid):
         os.unlink(path)
 
 
+_TYPE = r"S \(partial\)|P|S|E"
+_MONEY = r"\$[\d,]+(?:\.\d+)?"
+
+# Repeated page furniture: the table header is reprinted on every page, and can
+# land mid-row when a transaction straddles a page break.
+_HEADER = re.compile(r"ID Owner Asset Transaction\s+Type\s+Date Notification\s+"
+                     r"Date\s+Amount Cap\.\s+Gains >\s+\$200\?")
+_JUNK = re.compile(r"Filing ID #\d+|\f")
+
+_ANCHOR = re.compile(r"(?:" + _TYPE + r")\s+\d{2}/\d{2}/\d{4}\s+\d{2}/\d{2}/\d{4}\s+\$")
+
+# A row split by a page break: the head of the asset name and the spine end one
+# page, the rest of the name (carrying the ticker/asset code, and sometimes the
+# upper bound of the amount) resumes on the next. A complete row always carries
+# its [ASSET CODE] before the spine, so a spine-terminated line that does not is
+# the signature of a split.
+_ROW_OPEN = re.compile(
+    r"^(?P<head>.*?[^\]\s])[ ]*"
+    r"(?P<spine>(?:" + _TYPE + r") \d{2}/\d{2}/\d{4} \d{2}/\d{2}/\d{4} "
+    + _MONEY + r"(?: -(?: " + _MONEY + r")?)?)$")
+# Last line of a split name: ends at the [ASSET CODE], which the upper bound of
+# the amount may trail on the same line.
+_CODE_TAIL = re.compile(r"(?P<tail>.*\[[A-Za-z]{1,3}\])(?:[ ]*(?P<amt>" + _MONEY + r"))?$")
+_MONEY_ONLY = re.compile(_MONEY + r"$")
+
+# (TICKER) is absent on bonds, treasuries, structured notes and annuities, so
+# only the [ASSET CODE] is required to anchor a row.
 _SPINE = re.compile(
-    r"\(([A-Z0-9.\-]{1,6})\)\s*\[([A-Za-z]{1,3})\]\s*"       # (TICKER) [CODE]
-    r"(S \(partial\)|P|S|E)\s+"                                # transaction type
-    r"(\d{2}/\d{2}/\d{4})\s+\d{2}/\d{2}/\d{4}\s+"              # txn date, notification date
-    r"\$([\d,]+(?:\.\d+)?)(?:\s*-\s*\$([\d,]+(?:\.\d+)?)|\s*(\+))?")  # range | single | open-ended
+    r"(?:\((?P<ticker>[A-Z0-9.\-]{1,6})\)\s*)?"
+    r"\[(?P<code>[A-Za-z]{1,3})\]\s*"
+    r"(?P<type>" + _TYPE + r")\s+"
+    r"(?P<txn>\d{2}/\d{2}/\d{4})\s+\d{2}/\d{2}/\d{4}\s+"
+    r"\$(?P<low>[\d,]+(?:\.\d+)?)"
+    r"(?:\s*-\s*\$(?P<high>[\d,]+(?:\.\d+)?)|\s*(?P<plus>\+))?")
+
+# Lines that are never part of an asset name: per-row fields (F S / S O / D / C
+# / L), section headings, amount continuations and cover/footer boilerplate.
+_NOT_ASSET = re.compile(
+    r"^\s*(?:[A-Z](?:\s+[A-Z])*\s*:|[A-Z](?:\s+[A-Z]){0,3}\s*$|\*|" + _MONEY + r"\s*$"
+    r"|Yes No|I CERTIFY|my knowledge|Digitally Signed|Filing ID|Clerk of the House"
+    r"|Name:|Status:|State/District:|ID Owner)")
+
+_DESC_END = re.compile(r"\*\s*For the complete|Digitally Signed|Filing ID|I CERTIFY")
+
+_OWNER_PREFIX = re.compile(r"^(SP|JT|DC)\s+")
+
+# Widest asset-name line the PDF's asset column produces (observed max 36).
+_ASSET_WRAP = 48
+
+
+def _stitch(lines):
+    """Re-join transaction rows broken across a page boundary."""
+    out, i = [], 0
+    while i < len(lines):
+        m = _ROW_OPEN.match(lines[i].strip())
+        if not m:
+            out.append(lines[i])
+            i += 1
+            continue
+        tail, high, done, j = [], None, False, i + 1
+        while j < len(lines) and len(tail) < 3:
+            nxt = lines[j].strip()
+            if not nxt:                      # blank line left by the stripped header
+                j += 1
+                continue
+            if _NOT_ASSET.match(nxt) or _ANCHOR.search(nxt):
+                break
+            mt = _CODE_TAIL.match(nxt)
+            tail.append(mt.group("tail") if mt else nxt)
+            j += 1
+            if mt:
+                high, done = mt.group("amt"), True
+                break
+        if not done:
+            out.append(lines[i])
+            i += 1
+            continue
+        spine = m.group("spine")
+        if spine.endswith("-"):              # upper bound left behind on the next page
+            k = j
+            while k < len(lines) and not lines[k].strip():
+                k += 1
+            if high is None and k < len(lines) and _MONEY_ONLY.match(lines[k].strip()):
+                high, j = lines[k].strip(), k + 1
+            if high:
+                spine += " " + high
+        out.append("%s %s %s" % (m.group("head").strip(), " ".join(tail), spine))
+        i = j
+    return out
+
+
+def _clean(text):
+    """Drop repeated page furniture and re-join rows split by a page break."""
+    t = re.sub(r"[ \t]+", " ", text)
+    t = re.sub(r"[ \t]+", " ", _JUNK.sub(" ", _HEADER.sub("\n", t)))
+    return "\n".join(_stitch(t.split("\n")))
+
+
+def _asset_name(head):
+    """Asset name = the trailing run of non-field lines before the row's spine.
+
+    Returns (name, offset), where offset is where that run starts in `head` — it
+    doubles as the end of the preceding row's description.
+    """
+    pos, lines = 0, []
+    for ln in head.split("\n"):
+        if ln.strip():
+            lines.append((pos + len(ln) - len(ln.lstrip()), ln.strip()))
+        pos += len(ln) + 1
+    name, start = [], len(head)
+    for off, ln in reversed(lines):
+        if _NOT_ASSET.match(ln):
+            break
+        # The asset column wraps far narrower than the description column, so an
+        # over-wide line is the previous row's description, not part of the name.
+        # (Only the nearest line is exempt: it is cut short by the spine.)
+        if name and len(ln) > _ASSET_WRAP:
+            break
+        name.insert(0, ln)
+        start = off
+        # An owner code always opens an asset block, so it bounds the scan.
+        if _OWNER_PREFIX.match(ln) or len(name) == 4:
+            break
+    return re.sub(r"\s+", " ", " ".join(name)).strip(" -"), start
+
+
+def _rows(t):
+    """Extract transaction rows from already-cleaned PTR text."""
+    out, spans = [], []
+    for m in _SPINE.finditer(t):
+        name, start = _asset_name(t[:m.start()])
+        owner = ""
+        mo = _OWNER_PREFIX.match(name)
+        if mo:
+            owner, name = mo.group(1), name[mo.end():]
+        out.append({"ticker": m.group("ticker") or "", "name": name,
+                    "code": m.group("code"), "type": m.group("type"),
+                    "txn": m.group("txn"), "low": m.group("low"),
+                    "high": m.group("high"), "plus": m.group("plus"),
+                    "owner": owner, "desc": ""})
+        spans.append((m.end(), start))
+    # Description runs from the row's spine to the start of the next asset name.
+    for i, x in enumerate(out):
+        stop = spans[i + 1][1] if i + 1 < len(out) else len(t)
+        win = t[spans[i][0]:max(spans[i][0], stop)]
+        cut = _DESC_END.search(win)
+        if cut:
+            win = win[:cut.start()]
+        md = re.search(r"(?:^|\n)\s*D\s*:\s*([\s\S]+)", win)
+        if md:
+            x["desc"] = re.sub(r"\s+", " ", md.group(1)).strip()
+    return out
 
 
 def parse_ptr(text):
     """Parse a House PTR -> list of transaction dicts (best-effort)."""
-    t = re.sub(r"[ \t]+", " ", text.replace("\n", " "))
-    out = []
-    for m in _SPINE.finditer(t):
-        ticker, code, typ, txn, low, high, plus = m.groups()
-        pre = t[max(0, m.start() - 120):m.start()]
-        mo = re.search(r"(SP|JT|DC)\s+[^()]*$", pre)
-        owner = mo.group(1) if mo else ""
-        post = t[m.end():m.end() + 300]
-        md = re.search(r"D\s*:\s*(.+?)(?:\s+(?:SP|JT|DC)\s|\* For the complete|Filing ID|$)", post)
-        desc = (md.group(1).strip() if md else "")
-        out.append({"ticker": ticker, "code": code, "type": typ, "txn": txn,
-                    "low": low, "high": high, "plus": plus, "owner": owner, "desc": desc})
-    return out
+    return _rows(_clean(text))
+
+
+def parse_ptr_full(text):
+    """parse_ptr, plus how many rows the PDF actually holds.
+
+    The two differ only if a row shape slips past the parser; surfacing the gap
+    in the alert keeps such a miss from passing as a complete report.
+    """
+    t = _clean(text)
+    return _rows(t), len(_ANCHOR.findall(t))
 
 
 def _amt(s):
@@ -144,12 +289,22 @@ def band(low, high, plus=None):
     return money(lo)
 
 
-def build_message(member, row, txns):
+def label(x, width=44):
+    """Ticker when the asset has one, else the (trimmed) asset name."""
+    if x.get("ticker"):
+        return x["ticker"]
+    name = x.get("name") or "?"
+    return name if len(name) <= width else name[:width - 1].rstrip(" ,-") + "…"
+
+
+def build_message(member, row, txns, total=None):
     pdfurl = PTR_PDF.format(year=row["year"], docid=row["docid"])
     head = f"🏛️ <b>{esc(member['name'])}</b> ({esc(member['party'])}-{esc(row['state'])}) — new PTR"
     lines = [head, f"Filed {_isodate(row['date'])}"]
     if not txns:
         lines += ["", "(could not parse transactions — see filing)"]
+    elif total and total > len(txns):
+        lines += ["", f"({len(txns)} of {total} transactions parsed — see filing)"]
     groups, order = {}, []
     for x in txns:
         key = VERB.get(x["type"], ("•", x["type"]))
@@ -161,7 +316,7 @@ def build_message(member, row, txns):
         lines += ["", f"{emoji} <b>{verb}</b>"]
         for x in groups[(emoji, verb)]:
             code = "" if x["code"].upper() == "ST" else f" [{esc(x['code'])}]"
-            seg = f"• <b>{esc(x['ticker'])}</b>{code} — {band(x['low'], x['high'], x.get('plus'))} · {x['txn'][:5]}"
+            seg = f"• <b>{esc(label(x))}</b>{code} — {band(x['low'], x['high'], x.get('plus'))} · {x['txn'][:5]}"
             if x["desc"]:
                 seg += f" · {esc(x['desc'])}"
             lines.append(seg)
@@ -221,12 +376,13 @@ def main():
         if mode == "demo":
             if ptrs:
                 r = ptrs[-1]
+                txns, total = [], 0
                 try:
-                    txns = parse_ptr(pdf_text(r["year"], r["docid"]))
+                    txns, total = parse_ptr_full(pdf_text(r["year"], r["docid"]))
                 except Exception as e:  # noqa: BLE001
-                    txns = []
-                send_telegram(build_message(m, r, txns))
-                print(f"[demo] {m['name']}: sent {r['docid']} ({len(txns)} txns)")
+                    print(f"[warn] {m['name']}: {r['docid']} parse failed: {e}")
+                send_telegram(build_message(m, r, txns, total))
+                print(f"[demo] {m['name']}: sent {r['docid']} ({len(txns)}/{total} txns)")
             else:
                 print(f"[demo] {m['name']}: no PTRs found")
             continue
@@ -234,11 +390,12 @@ def main():
         seen = set(st["seen"])
         new = [r for r in ptrs if r["docid"] not in seen]
         for r in new:
+            txns, total = [], 0
             try:
-                txns = parse_ptr(pdf_text(r["year"], r["docid"]))
+                txns, total = parse_ptr_full(pdf_text(r["year"], r["docid"]))
             except Exception as e:  # noqa: BLE001
-                txns = []
-            send_telegram(build_message(m, r, txns), dry=(mode == "dry"))
+                print(f"[warn] {m['name']}: {r['docid']} parse failed: {e}")
+            send_telegram(build_message(m, r, txns, total), dry=(mode == "dry"))
             seen.add(r["docid"])
             changed = True
         if new and mode != "dry":
