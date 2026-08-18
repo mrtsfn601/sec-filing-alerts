@@ -74,10 +74,18 @@ def http_bytes(url, retries=3):
     raise RuntimeError(f"GET failed: {url} ({last})")
 
 
-def index_rows(year):
-    """Return PTR index rows for a year: dicts with last/first/type/state/date/docid."""
+def index_rows(year, fresh=False):
+    """Return PTR index rows for a year: dicts with last/first/type/state/date/docid.
+
+    The Clerk serves the index through a CDN that caches it for ~2h and ignores
+    no-cache, so `fresh` busts it by query string — worth it when re-sending a
+    named filing, but not on the 5-minute poll.
+    """
+    url = INDEX_ZIP.format(year=year)
+    if fresh:
+        url += "?t=%d" % int(time.time())
     try:
-        raw = http_bytes(INDEX_ZIP.format(year=year))
+        raw = http_bytes(url)
     except Exception:  # noqa: BLE001
         return []
     z = zipfile.ZipFile(io.BytesIO(raw))
@@ -356,7 +364,8 @@ def main():
                    if demo_filter in m["name"].lower() or demo_filter in m["last"].lower()]
     state = load_json(STATE, {})
     year = datetime.date.today().year
-    rows = index_rows(year) + index_rows(year - 1)  # cover Jan boundary
+    fresh = mode == "demo"
+    rows = index_rows(year, fresh) + index_rows(year - 1, fresh)  # cover Jan boundary
 
     changed = False
     for m in members:
