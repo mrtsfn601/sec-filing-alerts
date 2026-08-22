@@ -367,7 +367,7 @@ def main():
     fresh = mode == "demo"
     rows = index_rows(year, fresh) + index_rows(year - 1, fresh)  # cover Jan boundary
 
-    changed = False
+    before = json.dumps(state, sort_keys=True)
     for m in members:
         key = member_key(m)
         st = state.setdefault(key, {"name": m["name"], "seen": [], "last_filed": None})
@@ -379,7 +379,6 @@ def main():
             if ptrs:
                 st["last_filed"] = ptrs[-1]["date"]
             print(f"[seed] {m['name']}: {len(ptrs)} PTRs seen")
-            changed = True
             continue
 
         if mode == "demo":
@@ -398,21 +397,25 @@ def main():
 
         seen = set(st["seen"])
         new = [r for r in ptrs if r["docid"] not in seen]
-        for r in new:
-            txns, total = [], 0
-            try:
-                txns, total = parse_ptr_full(pdf_text(r["year"], r["docid"]))
-            except Exception as e:  # noqa: BLE001
-                print(f"[warn] {m['name']}: {r['docid']} parse failed: {e}")
-            send_telegram(build_message(m, r, txns, total), dry=(mode == "dry"))
-            seen.add(r["docid"])
-            changed = True
-        if new and mode != "dry":
-            st["seen"] = sorted(seen)
-            st["last_filed"] = ptrs[-1]["date"]
+        try:
+            for r in new:
+                txns, total = [], 0
+                try:
+                    txns, total = parse_ptr_full(pdf_text(r["year"], r["docid"]))
+                except Exception as e:  # noqa: BLE001
+                    print(f"[warn] {m['name']}: {r['docid']} parse failed: {e}")
+                send_telegram(build_message(m, r, txns, total), dry=(mode == "dry"))
+                seen.add(r["docid"])
+                if mode != "dry":
+                    # persist per delivery — see watch.py process_entity
+                    st["seen"] = sorted(seen)
+                    st["last_filed"] = ptrs[-1]["date"]
+        except Exception as e:  # noqa: BLE001 — keep what was already recorded
+            print(f"ERROR alerting {m['name']}: {e}")
         if not new:
             print(f"[ok] {m['name']}: no new PTRs")
 
+    changed = json.dumps(state, sort_keys=True) != before
     if mode == "seed" or (changed and mode == "normal"):
         save_json(STATE, state)
         print("house_state.json updated")

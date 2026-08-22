@@ -159,9 +159,9 @@ def main():
     if mode == "demo" and demo_filter:
         members = [m for m in members if demo_filter in m["name"].lower() or demo_filter in m["last"].lower()]
     state = load_json(STATE, {})
+    before = json.dumps(state, sort_keys=True)
 
     op, ctok = open_session()
-    changed = False
     for m in members:
         key = member_key(m)
         st = state.setdefault(key, {"name": m["name"], "seen": [], "last_filed": None})
@@ -180,7 +180,6 @@ def main():
             if ptrs:
                 st["last_filed"] = ptrs[-1]["date"]
             print(f"[seed] {m['name']}: {len(ptrs)} PTRs seen")
-            changed = True
             continue
 
         if mode == "demo":
@@ -195,18 +194,22 @@ def main():
 
         seen = set(st["seen"])
         new = [p for p in ptrs if p["uuid"] not in seen]
-        for p in new:
-            txns = [] if p["paper"] else parse_detail(op, p["href"])
-            send_telegram(build_message(m, p, txns), dry=(mode == "dry"))
-            seen.add(p["uuid"])
-            changed = True
-        if new and mode != "dry":
-            st["seen"] = sorted(seen)
-            st["last_filed"] = ptrs[-1]["date"]
+        try:
+            for p in new:
+                txns = [] if p["paper"] else parse_detail(op, p["href"])
+                send_telegram(build_message(m, p, txns), dry=(mode == "dry"))
+                seen.add(p["uuid"])
+                if mode != "dry":
+                    # persist per delivery — see watch.py process_entity
+                    st["seen"] = sorted(seen)
+                    st["last_filed"] = ptrs[-1]["date"]
+        except Exception as e:  # noqa: BLE001 — keep what was already recorded
+            print(f"ERROR alerting {m['name']}: {e}")
         if not new:
             print(f"[ok] {m['name']}: no new PTRs")
         time.sleep(0.3)  # polite pacing between senators
 
+    changed = json.dumps(state, sort_keys=True) != before
     if mode == "seed" or (changed and mode == "normal"):
         save_json(STATE, state)
         print("senate_state.json updated")

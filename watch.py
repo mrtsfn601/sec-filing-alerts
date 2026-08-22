@@ -21,6 +21,7 @@ Env (from GitHub Actions secrets; never hard-coded):
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.request
@@ -100,11 +101,33 @@ def recent_filings(cik):
     return d.get("name", ""), out
 
 
+_AMEND = re.compile(r"/A$", re.I)
+
+
 def form_matches(form, wanted):
+    """Match an EDGAR form string against a watchlist `forms` entry.
+
+    Token-based, not substring: "4" matches "4" and "4/A" but NOT "S-4",
+    "424B3", "DEF 14A" or "144"; "13D" matches "13D", "SC 13D/A" and
+    "SCHEDULE 13D"; "13F" matches "13F-HR" and "13F-NT". An entry may also be
+    a full form string ("SCHEDULE 13G"). ["*"] matches everything.
+    """
     if not wanted or "*" in wanted:
         return True
-    # substring match so e.g. "13D" catches "SCHEDULE 13D", "SC 13D/A", etc.
-    return any(w in form for w in wanted)
+    base = _AMEND.sub("", (form or "").strip()).upper()   # "SC 13D/A" -> "SC 13D"
+    tokens = base.split()                                 # "SC 13D"   -> [SC, 13D]
+    roots = {t.split("-")[0] for t in tokens}             # "13F-HR"   -> 13F
+    for w in wanted:
+        w = _AMEND.sub("", str(w).strip()).upper()
+        if not w:
+            continue
+        if w == base or w in tokens or w in roots:
+            return True
+        # Alphabetic-suffix variants of the same family ("13F" -> "13FCONP").
+        # The next character must not be a digit, or "4" would swallow "424B3".
+        if any(t.startswith(w) and not t[len(w)].isdigit() for t in tokens if len(t) > len(w)):
+            return True
+    return False
 
 
 def archive_urls(cik, accession):
@@ -609,10 +632,13 @@ def process_entity(entity, state, mode):
         send_telegram(msg, dry=(mode == "dry"))
         seen.add(f["accession"])
         changed = True
+        if mode != "dry":
+            # Record each delivery as it happens. send_telegram re-raises on
+            # HTTP errors, so a transient 429/5xx part-way through a batch
+            # would otherwise discard the whole batch and re-alert next run.
+            st["seen"] = sorted(seen)
+            st["last_filed"] = filings[0]["filed"]
 
-    if new_filings and mode != "dry":
-        st["seen"] = sorted(seen)
-        st["last_filed"] = filings[0]["filed"]
     if not new_filings:
         print(f"[ok] {entity_name}: no new filings")
     return changed
@@ -667,14 +693,16 @@ def main():
 
     watchlist = load_json(WATCHLIST, [])
     state = load_json(STATE, {})
-    any_changed = False
+    before = json.dumps(state, sort_keys=True)
     for entity in watchlist:
         try:
-            if process_entity(entity, state, mode):
-                any_changed = True
+            process_entity(entity, state, mode)
         except Exception as e:  # noqa: BLE001
             print(f"ERROR processing {entity.get('name', entity.get('cik'))}: {e}")
 
+    # Derive this from the state itself, not from a return value: an entity
+    # that raised part-way through may still have recorded deliveries above.
+    any_changed = json.dumps(state, sort_keys=True) != before
     if mode == "seed" or (any_changed and mode == "normal"):
         save_json(STATE, state)
         print("state.json updated")

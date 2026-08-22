@@ -26,8 +26,12 @@ Append to `watchlist.json`:
 { "name": "Berkshire Hathaway", "cik": "0001067983", "forms": ["13F-HR", "13F-HR/A"] }
 ```
 
-- `forms`: list of exact EDGAR form strings (e.g. `"13F-HR"`, `"SCHEDULE 13G"`, `"4"`),
-  or `["*"]` to alert on **every** form.
+- `forms`: list of EDGAR form types (e.g. `"13F"`, `"SCHEDULE 13G"`, `"4"`), or
+  `["*"]` to alert on **every** form. Matching is **by token, not substring**:
+  `"4"` matches `4` and `4/A` but *not* `S-4`, `424B3`, `DEF 14A` or `144`;
+  `"13D"` matches `13D`, `SC 13D/A` and `SCHEDULE 13D`; `"13F"` matches
+  `13F-HR`, `13F-NT` and `13FCONP`. This matters most for operating-company
+  CIKs, whose feeds are dominated by forms an insider filter should ignore.
 - Don't know the CIK? `python resolve_cik.py "Berkshire Hathaway"` (or a ticker).
 
 ## Secrets (set in GitHub → Settings → Secrets and variables → Actions)
@@ -48,6 +52,15 @@ Actions tab → **watch-edgar** → *Run workflow* → `mode`:
 - `dry-run` — detect + print, send nothing.
 
 Local: `python watch.py [--test|--seed|--dry-run]`.
+
+## Tests
+
+No framework or dependencies — plain asserts, run them directly:
+
+```bash
+python3 test_form_matches.py        # watchlist `forms` matching
+python3 test_state_persistence.py   # alerts survive a failed Telegram send
+```
 
 ## Notes / limits
 

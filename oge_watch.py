@@ -33,6 +33,7 @@ Env (GitHub Actions secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (via watch.py
 Requires: poppler-utils (pdftotext) on PATH.
 """
 
+import json
 import os
 import re
 import subprocess
@@ -59,7 +60,6 @@ BOND = re.compile(r"DUE|B/E|\bREV\b|SCH\s?D|CNTY|%|MTG|\bSER\b|OBLIG|HSG|AUTH|"
 
 
 def load_json(path, default):
-    import json
     if not os.path.exists(path):
         return default
     with open(path) as f:
@@ -67,7 +67,6 @@ def load_json(path, default):
 
 
 def save_json(path, obj):
-    import json
     with open(path, "w") as f:
         json.dump(obj, f, indent=2, sort_keys=True)
         f.write("\n")
@@ -293,7 +292,7 @@ def main():
 
     state = load_json(STATE, {})
     pdfs = index_pdfs()
-    changed = False
+    before = json.dumps(state, sort_keys=True)
 
     for filer in filers:
         key = filer_key(filer)
@@ -305,7 +304,6 @@ def main():
             if mine:
                 st["last"] = mine[0]["filename"]
             print(f"[seed] {filer['name']}: {len(mine)} PTRs seen")
-            changed = True
             continue
 
         if mode == "demo":
@@ -320,22 +318,26 @@ def main():
 
         seen = set(st["seen"])
         new = [p for p in mine if p["url"] not in seen]
-        for p in reversed(new):  # oldest first -> chronological
-            try:
-                summ = parse_278t(pdf_text(p["url"]))
-            except Exception as e:  # noqa: BLE001
-                summ = {"n": 0, "counts": {"BUY": 0, "SELL": 0, "EXCH": 0},
-                        "lo": 0, "hi": 0, "n_amt": 0, "equities": [], "received": ""}
-                print(f"  parse failed for {p['filename']}: {e}")
-            send_telegram(build_message(filer, p, summ), dry=(mode == "dry"))
-            seen.add(p["url"])
-            changed = True
-        if new and mode != "dry":
-            st["seen"] = sorted(seen)
-            st["last"] = mine[0]["filename"]
+        try:
+            for p in reversed(new):  # oldest first -> chronological
+                try:
+                    summ = parse_278t(pdf_text(p["url"]))
+                except Exception as e:  # noqa: BLE001
+                    summ = {"n": 0, "counts": {"BUY": 0, "SELL": 0, "EXCH": 0},
+                            "lo": 0, "hi": 0, "n_amt": 0, "equities": [], "received": ""}
+                    print(f"  parse failed for {p['filename']}: {e}")
+                send_telegram(build_message(filer, p, summ), dry=(mode == "dry"))
+                seen.add(p["url"])
+                if mode != "dry":
+                    # persist per delivery — see watch.py process_entity
+                    st["seen"] = sorted(seen)
+                    st["last"] = mine[0]["filename"]
+        except Exception as e:  # noqa: BLE001 — keep what was already recorded
+            print(f"ERROR alerting {filer['name']}: {e}")
         if not new:
             print(f"[ok] {filer['name']}: no new PTRs")
 
+    changed = json.dumps(state, sort_keys=True) != before
     if mode == "seed" or (changed and mode == "normal"):
         save_json(STATE, state)
         print("oge_state.json updated")
