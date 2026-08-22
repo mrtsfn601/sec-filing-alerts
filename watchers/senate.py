@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-senate_watch.py — alert on new U.S. SENATE Periodic Transaction Reports (PTRs)
+senate.py — alert on new U.S. SENATE Periodic Transaction Reports (PTRs)
 for a watchlist of senators, pushed to Telegram.
 
 Source: efdsearch.senate.gov. The site requires accepting an agreement
@@ -12,11 +12,11 @@ Senators matched on LAST NAME + first-name filter (disambiguates e.g. R. Scott
 vs T. Scott).
 
 Usage:
-  python senate_watch.py            # detect new PTRs, alert, update state
-  python senate_watch.py --seed     # mark all current PTRs seen, send nothing
-  python senate_watch.py --demo     # re-send each senator's latest PTR (no state write)
-  python senate_watch.py --dry-run  # detect + print, send nothing, save nothing
-  python senate_watch.py --test     # one-off test message
+  python -m watchers.senate            # detect new PTRs, alert, update state
+  python -m watchers.senate --seed     # mark all current PTRs seen, send nothing
+  python -m watchers.senate --demo     # re-send each senator's latest PTR (no state write)
+  python -m watchers.senate --dry-run  # detect + print, send nothing, save nothing
+  python -m watchers.senate --test     # one-off test message
 Env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (reused via watch.py); SENATE_MEMBER (demo filter)
 """
 
@@ -26,16 +26,18 @@ import os
 import re
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
-from watch import send_telegram, esc, money, _isodate
+from common.fmt import esc, isodate, money
+from common.http import SEC_UA
+from common.notify import send_telegram
+from common.store import config_path, load_json, save_json, state_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = os.path.join(HERE, "senate.json")
-STATE = os.path.join(HERE, "senate_state.json")
+WATCHLIST = config_path("senate")
+STATE = state_path("senate")
 
-UA = "sec-filing-alerts mrtsfn601 maratsafin601@gmail.com"
 BASE = "https://efdsearch.senate.gov"
 HOME = BASE + "/search/home/"
 SEARCH = BASE + "/search/report/data/"
@@ -44,24 +46,11 @@ VERB = {"Purchase": ("🟢", "BUY"), "Sale (Full)": ("🔴", "SELL"),
         "Sale (Partial)": ("🔴", "SELL(part)"), "Exchange": ("🔁", "EXCH")}
 
 
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    with open(path) as f:
-        return json.load(f)
-
-
-def save_json(path, obj):
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, sort_keys=True)
-        f.write("\n")
-
-
 def open_session():
     """Accept the eFD agreement; return (opener, csrftoken)."""
     cj = http.cookiejar.CookieJar()
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    op.addheaders = [("User-Agent", UA)]
+    op.addheaders = [("User-Agent", SEC_UA)]
     html = op.open(HOME, timeout=30).read().decode("utf-8", "replace")
     m = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', html)
     tok = m.group(1) if m else next((c.value for c in cj if c.name == "csrftoken"), "")
@@ -120,7 +109,7 @@ def band(s):
 
 def build_message(sen, ptr, txns):
     head = f"🏛️ <b>{esc(sen['name'])}</b> ({esc(sen['party'])}-{esc(sen['state'])}, Senate) — new PTR"
-    lines = [head, f"Filed {_isodate(ptr['date'])}"]
+    lines = [head, f"Filed {isodate(ptr['date'])}"]
     if ptr["paper"]:
         lines += ["", "(paper filing — see PDF)"]
     elif not txns:

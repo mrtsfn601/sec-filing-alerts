@@ -8,9 +8,12 @@ only after the whole batch finished, so a transient 429/5xx part-way through
 threw away every delivery in that batch and re-alerted them on the next run.
 """
 
+import os
 import sys
 
-import watch
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from watchers import edgar
 
 
 def _filings(n):
@@ -28,18 +31,18 @@ def _run(n, fail_after=None, mode="normal"):
             raise RuntimeError("HTTP Error 429: Too Many Requests")
         sent.append(msg)
 
-    orig = (watch.recent_filings, watch.send_telegram, watch.build_generic_message)
-    watch.recent_filings = lambda cik: ("Test Co", _filings(n))
-    watch.send_telegram = flaky
-    watch.build_generic_message = lambda *a, **k: "msg"
+    orig = (edgar.recent_filings, edgar.send_telegram, edgar.build_generic_message)
+    edgar.recent_filings = lambda cik: ("Test Co", _filings(n))
+    edgar.send_telegram = flaky
+    edgar.build_generic_message = lambda *a, **k: "msg"
     state = {}
     try:
-        watch.process_entity({"name": "Test Co", "cik": "0000000001", "forms": ["*"]},
+        edgar.process_entity({"name": "Test Co", "cik": "0000000001", "forms": ["*"]},
                              state, mode)
     except RuntimeError:
         pass
     finally:
-        watch.recent_filings, watch.send_telegram, watch.build_generic_message = orig
+        edgar.recent_filings, edgar.send_telegram, edgar.build_generic_message = orig
     return sent, state.get("0000000001", {}).get("seen", [])
 
 

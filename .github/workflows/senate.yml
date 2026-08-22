@@ -46,16 +46,16 @@ jobs:
             demo) ARG="--demo" ;;
             dry-run) ARG="--dry-run" ;;
           esac
-          python senate_watch.py $ARG
+          python -m watchers.senate $ARG
 
       - name: Commit state if changed
         run: |
-          if [[ -n "$(git status --porcelain senate_state.json)" ]]; then
+          if [[ -n "$(git status --porcelain state/senate.json)" ]]; then
             git config user.name  "filing-watch-bot"
             git config user.email "actions@users.noreply.github.com"
-            git add senate_state.json
+            git add state/senate.json
             git commit -m "senate state: new PTR(s) seen [skip ci]"
             git push
           else
-            echo "senate_state.json unchanged; nothing to commit"
+            echo "state/senate.json unchanged; nothing to commit"
           fi

@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 """
-house_watch.py — alert on new U.S. HOUSE Periodic Transaction Reports (PTRs,
+house.py — alert on new U.S. HOUSE Periodic Transaction Reports (PTRs,
 STOCK Act stock trades) for a watchlist of members, pushed to Telegram.
 
 Separate data source from the EDGAR watcher: the official House Clerk bulk
 disclosure feed. Detection is stdlib; the per-trade detail is parsed from the
 filing PDF with `pdftotext -raw` (poppler). Senate is a separate watcher
-(senate_watch.py — efdsearch.senate.gov).
+(watchers/senate.py — efdsearch.senate.gov).
 
 Members are matched on LAST NAME + STATE (robust vs. formal/nickname mismatches).
 
 Usage:
-  python house_watch.py            # detect new PTRs, alert, update state
-  python house_watch.py --seed     # mark all current PTRs seen, send nothing
-  python house_watch.py --demo     # re-send each member's latest PTR (no state write)
-  python house_watch.py --dry-run  # detect + print, send nothing, save nothing
-  python house_watch.py --test     # send a one-off test message
+  python -m watchers.house            # detect new PTRs, alert, update state
+  python -m watchers.house --seed     # mark all current PTRs seen, send nothing
+  python -m watchers.house --demo     # re-send each member's latest PTR (no state write)
+  python -m watchers.house --dry-run  # detect + print, send nothing, save nothing
+  python -m watchers.house --test     # send a one-off test message
 
 Env (GitHub Actions secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID  (reused via watch.py)
 Requires: poppler-utils (pdftotext) on PATH.
@@ -27,51 +27,24 @@ import io
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 import time
-import urllib.request
 import zipfile
 
-from watch import send_telegram, esc, money, _isodate  # reuse Telegram pipe + helpers
+from common.fmt import esc, isodate, money
+from common.http import http_bytes
+from common.notify import send_telegram
+from common.pdf import pdf_to_text
+from common.store import config_path, load_json, save_json, state_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = os.path.join(HERE, "house.json")
-STATE = os.path.join(HERE, "house_state.json")
+WATCHLIST = config_path("house")
+STATE = state_path("house")
 
-UA = "sec-filing-alerts mrtsfn601 maratsafin601@gmail.com"
 INDEX_ZIP = "https://disclosures-clerk.house.gov/public_disc/financial-pdfs/{year}FD.ZIP"
 PTR_PDF = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/{year}/{docid}.pdf"
 
 OWNER = {"SP": "spouse", "JT": "joint", "DC": "dep.child", "": "self"}
 VERB = {"P": ("🟢", "BUY"), "S": ("🔴", "SELL"), "S (partial)": ("🔴", "SELL(part)"), "E": ("🔁", "EXCH")}
-
-
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    with open(path) as f:
-        return json.load(f)
-
-
-def save_json(path, obj):
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, sort_keys=True)
-        f.write("\n")
-
-
-def http_bytes(url, retries=3):
-    last = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=60) as r:
-                return r.read()
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(1 + attempt)
-    raise RuntimeError(f"GET failed: {url} ({last})")
 
 
 def index_rows(year, fresh=False):
@@ -103,16 +76,7 @@ def index_rows(year, fresh=False):
 
 
 def pdf_text(year, docid):
-    raw = http_bytes(PTR_PDF.format(year=year, docid=docid))
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(raw)
-        path = f.name
-    try:
-        out = subprocess.run(["pdftotext", "-raw", path, "-"],
-                             capture_output=True, text=True, timeout=60)
-        return out.stdout
-    finally:
-        os.unlink(path)
+    return pdf_to_text(http_bytes(PTR_PDF.format(year=year, docid=docid)), timeout=60)
 
 
 _TYPE = r"S \(partial\)|P|S|E"
@@ -308,7 +272,7 @@ def label(x, width=44):
 def build_message(member, row, txns, total=None):
     pdfurl = PTR_PDF.format(year=row["year"], docid=row["docid"])
     head = f"🏛️ <b>{esc(member['name'])}</b> ({esc(member['party'])}-{esc(row['state'])}) — new PTR"
-    lines = [head, f"Filed {_isodate(row['date'])}"]
+    lines = [head, f"Filed {isodate(row['date'])}"]
     if not txns:
         lines += ["", "(could not parse transactions — see filing)"]
     elif total and total > len(txns):

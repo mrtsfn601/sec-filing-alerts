@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-oge_watch.py — alert on new Executive-Branch OGE Form 278-T Periodic
+oge.py — alert on new Executive-Branch OGE Form 278-T Periodic
 Transaction Reports (STOCK Act securities trades) published on
 whitehouse.gov/disclosures, pushed to Telegram.
 
@@ -23,35 +23,36 @@ Design notes
   in Python (no LLM).
 
 Usage:
-  python oge_watch.py            # detect new PTRs, alert, update state
-  python oge_watch.py --seed     # mark all current PTRs seen, send nothing
-  python oge_watch.py --demo     # re-send each filer's latest PTR (no state write)
-  python oge_watch.py --dry-run  # detect + print, send nothing, save nothing
-  python oge_watch.py --test     # send a one-off test message
+  python -m watchers.oge            # detect new PTRs, alert, update state
+  python -m watchers.oge --seed     # mark all current PTRs seen, send nothing
+  python -m watchers.oge --demo     # re-send each filer's latest PTR (no state write)
+  python -m watchers.oge --dry-run  # detect + print, send nothing, save nothing
+  python -m watchers.oge --test     # send a one-off test message
 
-Env (GitHub Actions secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (via watch.py)
+Env (GitHub Actions secrets): TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID (via common.notify)
 Requires: poppler-utils (pdftotext) on PATH.
 """
 
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
-import time
-import urllib.request
 
-from watch import send_telegram, esc, money  # reuse Telegram pipe + helpers
+from common.fmt import esc, money
+from common.http import BROWSER_UA, http_bytes
+from common.notify import send_telegram
+from common.pdf import pdf_to_text
+from common.store import config_path, load_json, save_json, state_path
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = os.path.join(HERE, "oge.json")
-STATE = os.path.join(HERE, "oge_state.json")
+WATCHLIST = config_path("oge")
+STATE = state_path("oge")
+
+
+def _get(url):
+    """whitehouse.gov serves the disclosure index only to a browser-shaped UA."""
+    return http_bytes(url, ua=BROWSER_UA, timeout=90)
 
 INDEX_URL = "https://www.whitehouse.gov/disclosures/"
-# A browser-ish UA; the White House CDN is fine with this (unlike SEC's WAF).
-UA = "Mozilla/5.0 (sec-filing-alerts; maratsafin601@gmail.com)"
-
 # Only treat a PDF as a Periodic Transaction Report (278-T), not an annual 278e.
 PTR_HINT = re.compile(r"periodic|transaction|278.?t", re.I)
 # Bond / fund markers — a description WITHOUT these is a candidate equity.
@@ -59,37 +60,11 @@ BOND = re.compile(r"DUE|B/E|\bREV\b|SCH\s?D|CNTY|%|MTG|\bSER\b|OBLIG|HSG|AUTH|"
                   r"\bGAS\b|UTIL|PWR|BD\b|NOTE|MUNI|MUN\b|CTF|PREPAY|TAX", re.I)
 
 
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    with open(path) as f:
-        return json.load(f)
-
-
-def save_json(path, obj):
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, sort_keys=True)
-        f.write("\n")
-
-
-def http_bytes(url, retries=3):
-    last = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA})
-            with urllib.request.urlopen(req, timeout=90) as r:
-                return r.read()
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(1 + attempt)
-    raise RuntimeError(f"GET failed: {url} ({last})")
-
-
 # ----------------------------- index -----------------------------
 
 def index_pdfs():
     """All PTR PDFs on the White House disclosures page: [{url, filename, text}]."""
-    html = http_bytes(INDEX_URL).decode("utf-8", "replace")
+    html = _get(INDEX_URL).decode("utf-8", "replace")
     out, seen = [], set()
     for href, txt in re.findall(r'<a[^>]+href="([^"]+\.pdf)"[^>]*>(.*?)</a>', html, re.S | re.I):
         if href in seen:
@@ -122,16 +97,7 @@ def _filename_date(fn):
 # ----------------------------- PDF parse -----------------------------
 
 def pdf_text(url):
-    raw = http_bytes(url)
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
-        f.write(raw)
-        path = f.name
-    try:
-        out = subprocess.run(["pdftotext", "-raw", path, "-"],
-                             capture_output=True, text=True, timeout=180)
-        return out.stdout
-    finally:
-        os.unlink(path)
+    return pdf_to_text(_get(url), timeout=180)
 
 
 def _ttype(word):

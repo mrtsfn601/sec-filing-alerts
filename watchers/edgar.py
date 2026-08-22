@@ -5,15 +5,15 @@ push a Telegram alert. For 13F-HR filings the alert groups holdings into
 Stocks / Calls / Puts (with subtotals) and diffs vs the prior quarter —
 all parsed deterministically in Python (no LLM).
 
-Generalizable: add any entity to watchlist.json as {name, cik, forms}.
+Generalizable: add any entity to config/edgar.json as {name, cik, forms}.
   forms: ["*"]            -> alert on every form
   forms: ["13F-HR", ...]  -> only the listed form types (exact EDGAR strings)
 
 Usage:
-  python watch.py            # normal: detect new filings, alert, update state
-  python watch.py --seed     # mark all current filings as seen, send nothing
-  python watch.py --test     # send a one-off test message
-  python watch.py --dry-run  # detect + print to stdout, send nothing, save nothing
+  python -m watchers.edgar            # normal: detect new filings, alert, update state
+  python -m watchers.edgar --seed     # mark all current filings as seen, send nothing
+  python -m watchers.edgar --test     # send a one-off test message
+  python -m watchers.edgar --dry-run  # detect + print to stdout, send nothing, save nothing
 
 Env (from GitHub Actions secrets; never hard-coded):
   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
@@ -23,64 +23,23 @@ import json
 import os
 import re
 import sys
-import time
-import urllib.request
-import urllib.parse
-import urllib.error
 import xml.etree.ElementTree as ET
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-WATCHLIST = os.path.join(HERE, "watchlist.json")
-STATE = os.path.join(HERE, "state.json")
+from common.fmt import esc, isodate, money, nicename, num
+from common.http import http_get
+from common.notify import send_telegram
+from common.store import config_path, load_json, save_json, state_path
 
-# SEC fair-access policy requires a descriptive User-Agent (NOT a secret).
-# Note: SEC's WAF rejects UAs containing a URL (e.g. "github.com/..").
-UA = "sec-filing-alerts mrtsfn601 maratsafin601@gmail.com"
+WATCHLIST = config_path("edgar")
+STATE = state_path("edgar")
+
 SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik:0>10}.json"
 ARCHIVE_DIR = "https://www.sec.gov/Archives/edgar/data/{cik_int}/{acc_nodash}/"
 INDEX_JSON = ARCHIVE_DIR + "index.json"
 FILING_INDEX = ARCHIVE_DIR + "{accession}-index.html"
 
-TG_API = "https://api.telegram.org/bot{token}/{method}"
-TG_LIMIT = 4096
 DIFF_THRESHOLD = 0.10       # +/-10% value change counts as a resize
 DUST = 1_000_000            # positions below $1M are collapsed / ignored in diffs
-
-
-# ----------------------------- HTTP helpers -----------------------------
-
-def http_get(url, as_json=False, retries=3):
-    last = None
-    for attempt in range(retries):
-        try:
-            req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Encoding": "gzip, deflate"})
-            with urllib.request.urlopen(req, timeout=30) as r:
-                raw = r.read()
-                if "gzip" in r.headers.get("Content-Encoding", ""):
-                    import gzip
-                    raw = gzip.decompress(raw)
-                data = raw.decode("utf-8", "replace")
-            time.sleep(0.2)  # polite (SEC asks <= 10 req/s)
-            return json.loads(data) if as_json else data
-        except Exception as e:  # noqa: BLE001
-            last = e
-            time.sleep(1 + attempt)
-    raise RuntimeError(f"GET failed after {retries} tries: {url} ({last})")
-
-
-# ----------------------------- state / config -----------------------------
-
-def load_json(path, default):
-    if not os.path.exists(path):
-        return default
-    with open(path) as f:
-        return json.load(f)
-
-
-def save_json(path, obj):
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2, sort_keys=True)
-        f.write("\n")
 
 
 # ----------------------------- EDGAR -----------------------------
@@ -196,28 +155,6 @@ def prior_13f(filings, current_accession):
 
 # ----------------------------- formatting -----------------------------
 
-def esc(s):
-    return (s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-
-def money(v):
-    sign = "-" if v < 0 else ""
-    a = abs(v)
-    if a >= 1e9:
-        return f"{sign}${a/1e9:.2f}B"
-    if a >= 1e6:
-        return f"{sign}${a/1e6:.1f}M"
-    return f"{sign}${a:,.0f}"
-
-
-_NAME_TOKENS = {"Etf": "ETF", "Nv": "NV", "Ny": "NY", "Ltd": "Ltd", "Llc": "LLC",
-                "Lp": "LP", "Plc": "PLC", "Ai": "AI", "Usa": "USA", "Hldg": "Hldg"}
-
-
-def nicename(s):
-    return " ".join(_NAME_TOKENS.get(w, w) for w in s.title().split())
-
-
 def _groups(now):
     g = {"LONG": [], "Call": [], "Put": []}
     sub = {"LONG": 0, "Call": 0, "Put": 0}
@@ -303,25 +240,6 @@ def build_13f_message(entity_name, filing, cik, filings):
     return "\n".join(lines)
 
 
-def _num(s):
-    try:
-        return float(str(s).replace(",", "").strip())
-    except (ValueError, AttributeError):
-        return 0.0
-
-
-def _isodate(s):
-    """'06/22/2026' -> '2026-06-22' (leave other formats unchanged)."""
-    parts = (s or "").strip().split("/")
-    if len(parts) == 3 and parts[2].isdigit():
-        mm, dd, yy = parts
-        try:
-            return f"{yy}-{int(mm):02d}-{int(dd):02d}"
-        except ValueError:
-            return s
-    return s
-
-
 def build_ownership_message(entity_name, filing, cik):
     """13D / 13G beneficial-ownership filings (structured XML, post-2024)."""
     _, idx_url, base = archive_urls(cik, filing["accession"])
@@ -342,16 +260,16 @@ def build_ownership_message(entity_name, filing, cik):
     cls = ft("securitiesClassTitle")
     # field names differ between the 13G and 13D XML schemas — try both
     event = ft("eventDateRequiresFilingThisStatement") or ft("dateOfEvent")
-    shares = max([_num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")]
-                 + [_num(e.text) for e in root.iter("aggregateAmountOwned")] + [0.0])
-    pct = max([_num(e.text) for e in root.iter("classPercent")]
-              + [_num(e.text) for e in root.iter("percentOfClass")] + [0.0])
+    shares = max([num(e.text) for e in root.iter("reportingPersonBeneficiallyOwnedAggregateNumberOfShares")]
+                 + [num(e.text) for e in root.iter("aggregateAmountOwned")] + [0.0])
+    pct = max([num(e.text) for e in root.iter("classPercent")]
+              + [num(e.text) for e in root.iter("percentOfClass")] + [0.0])
 
     hdr2 = f"Filed {filing['filed']}"
     if filing.get("period"):
         hdr2 += f" · Reported {filing['period']}"
     if event:
-        hdr2 += f" · Event date {_isodate(event)}"
+        hdr2 += f" · Event date {isodate(event)}"
     lines = [
         f"\U0001F6A8 <b>{esc(entity_name)}</b> — new {esc(short)}",
         hdr2,
@@ -424,10 +342,10 @@ def _f4_txns(root):
                 "title": (t.findtext("securityTitle/value") or "").strip(),
                 "date": (t.findtext("transactionDate/value") or "").strip(),
                 "code": (t.findtext("transactionCoding/transactionCode") or "").strip(),
-                "shares": _num(t.findtext("transactionAmounts/transactionShares/value")),
-                "price": _num(t.findtext("transactionAmounts/transactionPricePerShare/value")),
+                "shares": num(t.findtext("transactionAmounts/transactionShares/value")),
+                "price": num(t.findtext("transactionAmounts/transactionPricePerShare/value")),
                 "ad": (t.findtext("transactionAmounts/transactionAcquiredDisposedCode/value") or "").strip(),
-                "held": _num(t.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
+                "held": num(t.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
                 "di": (t.findtext("ownershipNature/directOrIndirectOwnership/value") or "").strip(),
                 "deriv": table.startswith("deriv"),
             })
@@ -445,7 +363,7 @@ def _f4_holdings(root):
         for h in tbl.findall(tag):
             out.append({
                 "title": _short_sec(h.findtext("securityTitle/value") or ""),
-                "shares": _num(h.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
+                "shares": num(h.findtext("postTransactionAmounts/sharesOwnedFollowingTransaction/value")),
                 "di": (h.findtext("ownershipNature/directOrIndirectOwnership/value") or "").strip(),
             })
     return out
@@ -537,55 +455,6 @@ def build_generic_message(entity_name, filing, cik):
         f"{esc(desc)}",
         f'<a href="{idx_url}">Filing ↗</a>',
     ])
-
-
-# ----------------------------- Telegram -----------------------------
-
-def _chunks(text, limit=TG_LIMIT):
-    """Split on line boundaries so an HTML tag is never broken mid-message."""
-    chunks, cur = [], ""
-    for line in text.split("\n"):
-        while len(line) > limit:  # pathological single long line
-            if cur:
-                chunks.append(cur)
-                cur = ""
-            chunks.append(line[:limit])
-            line = line[limit:]
-        if len(cur) + len(line) + 1 > limit:
-            chunks.append(cur)
-            cur = line
-        else:
-            cur = line if not cur else cur + "\n" + line
-    if cur:
-        chunks.append(cur)
-    return chunks
-
-
-def send_telegram(text, dry=False):
-    if dry:
-        print("---- TELEGRAM (dry) ----\n" + text + "\n------------------------")
-        return
-    token = os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat = os.environ.get("TELEGRAM_CHAT_ID")
-    if not token or not chat:
-        # Hard-fail rather than silently swallow: keeps the filing from being
-        # marked "seen", so it re-alerts once the secrets are configured.
-        raise RuntimeError("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
-    for chunk in _chunks(text, TG_LIMIT):
-        payload = urllib.parse.urlencode({
-            "chat_id": chat,
-            "text": chunk,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": "true",
-        }).encode()
-        req = urllib.request.Request(TG_API.format(token=token, method="sendMessage"), data=payload)
-        try:
-            with urllib.request.urlopen(req, timeout=30) as r:
-                r.read()
-        except urllib.error.HTTPError as e:
-            print(f"Telegram error {e.code}: {e.read().decode('utf-8','replace')}")
-            raise
-        time.sleep(0.3)
 
 
 # ----------------------------- main -----------------------------

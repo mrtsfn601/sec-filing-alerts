@@ -5,12 +5,15 @@ Run: python3 test_form_matches.py
 
 Guards the substring-matching bug: an entry of "4" used to match "S-4",
 "424B3", "DEF 14A" and "144", and "3" matched "S-3" and "13F-HR", so adding
-an operating-company CIK to watchlist.json alerted on its whole filing feed.
+an operating-company CIK to config/edgar.json alerted on its whole filing feed.
 """
 
+import os
 import sys
 
-from watch import form_matches
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from watchers.edgar import form_matches
 
 # (wanted, form, should_match)
 CASES = [

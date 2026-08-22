@@ -49,16 +49,16 @@ jobs:
             demo) ARG="--demo" ;;
             dry-run) ARG="--dry-run" ;;
           esac
-          python oge_watch.py $ARG
+          python -m watchers.oge $ARG
 
       - name: Commit state if changed
         run: |
-          if [[ -n "$(git status --porcelain oge_state.json)" ]]; then
+          if [[ -n "$(git status --porcelain state/oge.json)" ]]; then
             git config user.name  "filing-watch-bot"
             git config user.email "actions@users.noreply.github.com"
-            git add oge_state.json
+            git add state/oge.json
             git commit -m "oge state: new PTR(s) seen [skip ci]"
             git push
           else
-            echo "oge_state.json unchanged; nothing to commit"
+            echo "state/oge.json unchanged; nothing to commit"
           fi

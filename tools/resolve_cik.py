@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Resolve a company/fund name (or ticker) to its 10-digit SEC CIK, so you never
-hand-search EDGAR when adding an entity to watchlist.json.
+hand-search EDGAR when adding an entity to config/edgar.json.
 
 Usage:
   python resolve_cik.py "Berkshire Hathaway"
@@ -73,6 +73,6 @@ if __name__ == "__main__":
     print(f"Matches for {query!r}:")
     for cik, title, ticker in hits:
         print(f"  CIK {cik}  {title}" + (f"  [{ticker}]" if ticker else ""))
-    print("\nAdd to watchlist.json, e.g.:")
+    print("\nAdd to config/edgar.json, e.g.:")
     cik, title, _ = hits[0]
     print(json.dumps({"name": title, "cik": cik, "forms": ["13F-HR", "13F-HR/A"]}, indent=2))
